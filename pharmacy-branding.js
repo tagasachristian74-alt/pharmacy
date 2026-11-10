@@ -3,7 +3,38 @@
 (function (global) {
     const STORAGE_KEY = "epharmaSettings";
     const SESSION_KEY = "epharmaSession";
+    const DEMO_USERS_KEY = "epharmaDemoUsers";
     const DEFAULT_LOGO_PATH = "assets/default-logo.svg";
+
+    const DEFAULT_DEMO_USERS = [
+        {
+            user_id: 1,
+            username: "admin",
+            password: "Admin123!",
+            fullName: "Administrator",
+            email: "admin@example.com",
+            role: "admin",
+            status: "Active"
+        },
+        {
+            user_id: 2,
+            username: "cashier",
+            password: "Cashier123!",
+            fullName: "Cashier 1 (Alex Reyes)",
+            email: "cashier@example.com",
+            role: "cashier",
+            status: "Active"
+        },
+        {
+            user_id: 3,
+            username: "cashier2",
+            password: "Cashier123!",
+            fullName: "Cashier 2 (Maria Santos)",
+            email: "maria@example.com",
+            role: "cashier",
+            status: "Active"
+        }
+    ];
 
     const DEFAULT_SETTINGS = {
         pharmacyName: "E-Pharma",
@@ -25,25 +56,64 @@
         lowStockLevel: 10
     };
 
+    function getDemoUsers() {
+        try {
+            const raw = localStorage.getItem(DEMO_USERS_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    return parsed;
+                }
+            }
+        } catch {
+            // Ignore storage errors.
+        }
+        return DEFAULT_DEMO_USERS.map(u => ({ ...u }));
+    }
+
+    function saveDemoUsers(users) {
+        try {
+            localStorage.setItem(DEMO_USERS_KEY, JSON.stringify(users));
+        } catch {
+            // Ignore storage errors.
+        }
+    }
+
     function getActiveSession() {
         try {
             const raw = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY);
             if (raw) {
                 const parsed = JSON.parse(raw);
                 if (parsed && (parsed.role === "admin" || parsed.role === "cashier")) {
-                    return parsed;
+                    return {
+                        user_id: parsed.user_id || (parsed.role === "cashier" ? 2 : 1),
+                        username: String(parsed.username || parsed.role),
+                        fullName: String(parsed.fullName || (parsed.role === "cashier" ? "Cashier" : "Administrator")),
+                        email: String(parsed.email || ""),
+                        role: parsed.role
+                    };
                 }
             }
         } catch {
             // Ignore parse errors.
         }
-        return { role: "admin", username: "admin" };
+        return {
+            user_id: 1,
+            username: "admin",
+            fullName: "Administrator",
+            email: "admin@example.com",
+            role: "admin"
+        };
     }
 
     function setActiveSession(session) {
+        const role = session && session.role === "cashier" ? "cashier" : "admin";
         const clean = {
-            role: session && session.role === "cashier" ? "cashier" : "admin",
-            username: String((session && session.username) || "admin")
+            user_id: (session && session.user_id) || (role === "cashier" ? 2 : 1),
+            username: String((session && session.username) || role),
+            fullName: String((session && (session.fullName || session.full_name)) || (role === "cashier" ? "Cashier" : "Administrator")),
+            email: String((session && session.email) || ""),
+            role
         };
         try {
             sessionStorage.setItem(SESSION_KEY, JSON.stringify(clean));
@@ -288,9 +358,8 @@
         // Dashboard active user profile & role labels.
         const session = getActiveSession();
         const isCashier = session.role === "cashier";
-        const displayName = isCashier
-            ? (settings.cashierName || "Cashier")
-            : (settings.adminName || "Admin");
+        const displayName = session.fullName
+            || (isCashier ? (settings.cashierName || "Cashier") : (settings.adminName || "Administrator"));
         const roleSubtitle = isCashier ? "POS Cashier" : "Administrator";
         const userInitial = displayName.charAt(0).toUpperCase() || (isCashier ? "C" : "A");
 
@@ -300,14 +369,14 @@
 
         const sidebarAdminName = document.getElementById("sidebarAdminName");
         if (sidebarAdminName) {
-            sidebarAdminName.textContent = !isCashier && displayName === "Admin"
-                ? "Administrator"
-                : displayName;
+            sidebarAdminName.textContent = displayName;
         }
 
         const sidebarRoleLabel = document.getElementById("sidebarRoleLabel");
         if (sidebarRoleLabel) {
-            sidebarRoleLabel.textContent = isCashier ? "Cashier Account" : "Pharmacy Admin";
+            sidebarRoleLabel.textContent = isCashier
+                ? `Cashier (${session.username})`
+                : `Admin (${session.username})`;
         }
 
         const topbarAdminName = document.getElementById("topbarAdminName");
@@ -535,6 +604,7 @@
     global.EPharmaBranding = {
         DEFAULT_LOGO_PATH,
         DEFAULT_SETTINGS,
+        DEFAULT_DEMO_USERS,
         formatAddress,
         hasSpecificAddress,
         getLogoSrc,
@@ -544,6 +614,8 @@
         syncFromServer,
         saveSettings,
         processLogoFile,
+        getDemoUsers,
+        saveDemoUsers,
         getActiveSession,
         setActiveSession,
         clearActiveSession

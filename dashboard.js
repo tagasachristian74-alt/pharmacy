@@ -32,6 +32,8 @@ const navLinks = document.querySelectorAll(".nav-link");
 let isDemoDatabaseMode = false;
 let pendingSaleMedicineId = null;
 
+const DEMO_LOGS_KEY = "epharmaDemoLogs";
+
 const ROLE_ALLOWED_PAGES = {
     admin: [
         "dashboard",
@@ -40,12 +42,17 @@ const ROLE_ALLOWED_PAGES = {
         "purchase",
         "suppliers",
         "expiration",
-        "settings"
+        "cashiers",
+        "logs",
+        "settings",
+        "account"
     ],
     cashier: [
-        "sales",
+        "dashboard",
         "inventory",
-        "expiration"
+        "sales",
+        "expiration",
+        "account"
     ]
 };
 
@@ -64,7 +71,7 @@ function getCurrentSession() {
     } catch {
         // Ignore storage errors.
     }
-    return { role: "admin", username: "admin" };
+    return { user_id: 1, role: "admin", username: "admin", fullName: "Administrator", email: "admin@example.com" };
 }
 
 function getCurrentRole() {
@@ -75,13 +82,19 @@ function isCashierRole() {
     return getCurrentRole() === "cashier";
 }
 
+function getCurrentUsername() {
+    return String(getCurrentSession().username || (isCashierRole() ? "cashier" : "admin"));
+}
+
 function getCurrentDisplayName() {
+    const session = getCurrentSession();
+    if (session.fullName) return session.fullName;
     const branding = window.EPharmaBranding;
     const settings = branding ? branding.getCachedSettings() : {};
     if (isCashierRole()) {
         return settings.cashierName || "Cashier";
     }
-    return settings.adminName || "Admin";
+    return settings.adminName || "Administrator";
 }
 
 function canAccessPage(pageName) {
@@ -93,7 +106,12 @@ function applyRoleAccessControl() {
     const role = getCurrentRole();
     const menuLabel = document.getElementById("sidebarMenuLabel");
     if (menuLabel) {
-        menuLabel.textContent = role === "cashier" ? "CASHIER POS MENU" : "ADMIN MENU";
+        menuLabel.textContent = role === "cashier" ? "CASHIER WORKSPACE" : "ADMIN MENU";
+    }
+
+    const navSalesLabel = document.getElementById("navSalesLabel");
+    if (navSalesLabel) {
+        navSalesLabel.textContent = role === "cashier" ? "POS & My Sales" : "Sales Reports";
     }
 
     navLinks.forEach(function (link) {
@@ -130,6 +148,87 @@ function calculateDiscountedPrice(unitPrice, discountPercent) {
 
 function isServerDbUnavailable(response, payload) {
     return (response && response.status === 503) || Boolean(payload && payload.dbUnavailable);
+}
+
+let activityLogs = (function loadInitialLogs() {
+    try {
+        const raw = localStorage.getItem(DEMO_LOGS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+    } catch {
+        // Ignore storage errors.
+    }
+    const now = Date.now();
+    return [
+        {
+            log_id: 4,
+            username: "cashier",
+            actor_name: "Cashier 1 (Alex Reyes)",
+            role: "cashier",
+            module: "Sales",
+            action: "Completed Sale",
+            details: "Receipt EP-0006: Vitamin C 500mg x5 (₱16.00)",
+            created_at: new Date(now - 3600000).toISOString()
+        },
+        {
+            log_id: 3,
+            username: "cashier2",
+            actor_name: "Cashier 2 (Maria Santos)",
+            role: "cashier",
+            module: "Sales",
+            action: "Completed Sale",
+            details: "Receipt EP-0005: Amoxicillin 500mg x4 (₱32.00)",
+            created_at: new Date(now - 7200000).toISOString()
+        },
+        {
+            log_id: 2,
+            username: "admin",
+            actor_name: "Administrator",
+            role: "admin",
+            module: "Inventory",
+            action: "Updated Medicine",
+            details: "Set 20% discount on Vitamin C 500mg",
+            created_at: new Date(now - 86400000).toISOString()
+        },
+        {
+            log_id: 1,
+            username: "admin",
+            actor_name: "Administrator",
+            role: "admin",
+            module: "Auth",
+            action: "Logged In",
+            details: "Admin session started",
+            created_at: new Date(now - 2 * 86400000).toISOString()
+        }
+    ];
+})();
+
+function saveDemoLogs() {
+    try {
+        localStorage.setItem(DEMO_LOGS_KEY, JSON.stringify(activityLogs.slice(0, 200)));
+    } catch {
+        // Ignore storage errors.
+    }
+}
+
+function recordLocalActivity(module, action, details) {
+    const nextId = activityLogs.reduce((m, item) => Math.max(m, Number(item.log_id || 0)), 0) + 1;
+    activityLogs.unshift({
+        log_id: nextId,
+        username: getCurrentUsername(),
+        actor_name: getCurrentDisplayName(),
+        role: getCurrentRole(),
+        module,
+        action,
+        details: details || "",
+        created_at: new Date().toISOString()
+    });
+    saveDemoLogs();
+    if (document.getElementById("activityLogsBody")) {
+        renderActivityLogs();
+    }
 }
 
 
@@ -178,48 +277,232 @@ document.addEventListener("click", function (event) {
 
 
 // =========================================
-// 4. SALES CHART SAMPLE DATA
+// 4. LIVE SALES OVERVIEW CHART (CONNECTED TO ALL DATA)
 // =========================================
 
-const chartData = {
-    month: {
-        total: "₱25,430",
-        bars: [30, 45, 38, 62, 55, 78, 90]
-    },
+function formatCompactPeso(amount) {
+    const val = Number(amount || 0);
+    if (val >= 1000000) return "₱" + (val / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+    if (val >= 1000) return "₱" + (val / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+    return "₱" + Math.round(val);
+}
 
-    week: {
-        total: "₱6,820",
-        bars: [35, 60, 45, 80, 55, 72, 95]
+function getNiceChartCeiling(maxValue) {
+    if (!Number.isFinite(maxValue) || maxValue <= 0) return 1000;
+    const magnitude = Math.pow(10, Math.floor(Math.log10(maxValue)));
+    const normalized = maxValue / magnitude;
+    let step = 10;
+    if (normalized <= 1) step = 1;
+    else if (normalized <= 2) step = 2;
+    else if (normalized <= 4) step = 4;
+    else if (normalized <= 5) step = 5;
+    else if (normalized <= 8) step = 8;
+    const ceiling = Math.ceil(step * magnitude / 4) * 4;
+    return Math.max(40, ceiling);
+}
+
+function buildSalesOverviewData(period) {
+    const now = new Date();
+    const records = typeof salesRecords !== "undefined" ? salesRecords : [];
+    const buckets = [];
+
+    if (period === "today") {
+        const ranges = [
+            { label: "00–04", start: 0, end: 3 },
+            { label: "04–08", start: 4, end: 7 },
+            { label: "08–12", start: 8, end: 11 },
+            { label: "12–16", start: 12, end: 15 },
+            { label: "16–20", start: 16, end: 19 },
+            { label: "20–24", start: 20, end: 23 }
+        ];
+        ranges.forEach(r => buckets.push({ label: r.label, total: 0, count: 0, start: r.start, end: r.end }));
+
+        records.forEach(sale => {
+            const d = new Date(sale.timestamp);
+            if (
+                d.getFullYear() === now.getFullYear() &&
+                d.getMonth() === now.getMonth() &&
+                d.getDate() === now.getDate()
+            ) {
+                const hr = d.getHours();
+                const bucket = buckets.find(b => hr >= b.start && hr <= b.end);
+                if (bucket) {
+                    bucket.total += Number(sale.total || 0);
+                    bucket.count += 1;
+                }
+            }
+        });
+    } else if (period === "week") {
+        for (let offset = 6; offset >= 0; offset--) {
+            const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+            const key = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
+            const label = day.toLocaleDateString("en-PH", { weekday: "short" });
+            buckets.push({ key, label, total: 0, count: 0 });
+        }
+
+        records.forEach(sale => {
+            const d = new Date(sale.timestamp);
+            const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+            const bucket = buckets.find(b => b.key === key);
+            if (bucket) {
+                bucket.total += Number(sale.total || 0);
+                bucket.count += 1;
+            }
+        });
+    } else if (period === "year") {
+        const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        monthNames.forEach((m, idx) => buckets.push({ month: idx, label: m, total: 0, count: 0 }));
+
+        records.forEach(sale => {
+            const d = new Date(sale.timestamp);
+            if (d.getFullYear() === now.getFullYear()) {
+                const bucket = buckets[d.getMonth()];
+                if (bucket) {
+                    bucket.total += Number(sale.total || 0);
+                    bucket.count += 1;
+                }
+            }
+        });
+    } else {
+        // Default: "month" (6 day-ranges across current month)
+        const monthDefs = [
+            { label: "1–5", min: 1, max: 5 },
+            { label: "6–10", min: 6, max: 10 },
+            { label: "11–15", min: 11, max: 15 },
+            { label: "16–20", min: 16, max: 20 },
+            { label: "21–25", min: 21, max: 25 },
+            { label: "26–End", min: 26, max: 31 }
+        ];
+        monthDefs.forEach(def => buckets.push({ ...def, total: 0, count: 0 }));
+
+        records.forEach(sale => {
+            const d = new Date(sale.timestamp);
+            if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) {
+                const dayNum = d.getDate();
+                const bucket = buckets.find(b => dayNum >= b.min && dayNum <= b.max);
+                if (bucket) {
+                    bucket.total += Number(sale.total || 0);
+                    bucket.count += 1;
+                }
+            }
+        });
     }
-};
+
+    const totalRevenue = buckets.reduce((sum, b) => sum + b.total, 0);
+    const totalCount = buckets.reduce((sum, b) => sum + b.count, 0);
+    const maxBucket = Math.max(0, ...buckets.map(b => b.total));
+    const ceiling = getNiceChartCeiling(maxBucket);
+
+    return {
+        buckets,
+        totalRevenue,
+        totalCount,
+        avgSale: totalCount > 0 ? totalRevenue / totalCount : 0,
+        ceiling
+    };
+}
+
+function renderSalesOverviewChart() {
+    const periodEl = document.getElementById("salesPeriod");
+    const gridEl = document.getElementById("chartGridLabels");
+    const barAreaEl = document.getElementById("chartBarArea");
+    const chartTotalEl = document.getElementById("chartTotal");
+    const chartMetaEl = document.getElementById("chartMetaSummary");
+
+    if (!barAreaEl || !gridEl) return;
+
+    const period = periodEl ? periodEl.value : "month";
+    const data = buildSalesOverviewData(period);
+
+    if (chartTotalEl) {
+        chartTotalEl.textContent = "₱" + data.totalRevenue.toLocaleString("en-PH", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+    }
+    if (chartMetaEl) {
+        chartMetaEl.textContent = `${data.totalCount} transaction${data.totalCount === 1 ? "" : "s"} · Avg ₱${data.avgSale.toFixed(2)}`;
+    }
+
+    const ticks = [
+        data.ceiling,
+        data.ceiling * 0.75,
+        data.ceiling * 0.5,
+        data.ceiling * 0.25,
+        0
+    ];
+    gridEl.innerHTML = ticks
+        .map(val => `<span>${formatCompactPeso(val)}</span>`)
+        .join("");
+
+    barAreaEl.innerHTML = data.buckets.map(bucket => {
+        const pct = data.ceiling > 0 && bucket.total > 0
+            ? Math.max(8, Math.min(100, Math.round((bucket.total / data.ceiling) * 100)))
+            : 3;
+        const emptyClass = bucket.total <= 0 ? " is-empty" : "";
+        const valText = bucket.total > 0 ? formatCompactPeso(bucket.total) : "";
+        const tooltip = `${bucket.label}: ₱${bucket.total.toFixed(2)} (${bucket.count} sale${bucket.count === 1 ? "" : "s"})`;
+
+        return `
+            <div class="bar-column" title="${escapeSupplierText(tooltip)}">
+                ${valText ? `<span class="bar-value">${valText}</span>` : ""}
+                <div class="bar${emptyClass}" style="height:${pct}%"></div>
+                <small>${escapeSupplierText(bucket.label)}</small>
+            </div>
+        `;
+    }).join("");
+}
+
+function applyDashboardRoleView() {
+    const cashierMode = isCashierRole();
+    const subtitleEl = document.getElementById("dashboardSubtitle");
+    const medCardTitle = document.getElementById("medCardTitle");
+    const medCardNote = document.getElementById("medCardNote");
+    const salesCardTitle = document.getElementById("salesCardTitle");
+    const salesCardIcon = document.getElementById("salesCardIcon");
+    const salesCardNote = document.getElementById("salesCardNote");
+    const salesOverviewPanel = document.getElementById("salesOverviewPanel");
+    const cashierShiftPanel = document.getElementById("cashierShiftPanel");
+    const manageReordersLink = document.getElementById("manageReordersLink");
+    const recentSalesHeading = document.getElementById("recentSalesHeading");
+    const recentSalesSubheading = document.getElementById("recentSalesSubheading");
+    const recentSalesViewAll = document.getElementById("recentSalesViewAll");
+
+    if (subtitleEl) {
+        subtitleEl.textContent = cashierMode
+            ? `Welcome, ${getCurrentDisplayName()}! View operational stock alerts and your shift transactions.`
+            : "Welcome back! Monitor live sales analytics, inventory health, and pharmacy operations.";
+    }
+    if (medCardTitle) medCardTitle.textContent = cashierMode ? "In-Stock Medicines" : "Total Medicines";
+    if (medCardNote) medCardNote.textContent = cashierMode ? "Ready to dispense at POS" : "Medicines in inventory";
+    if (salesCardTitle) salesCardTitle.textContent = cashierMode ? "My Transactions Today" : "Total Sales";
+    if (salesCardIcon) salesCardIcon.textContent = cashierMode ? "▣" : "₱";
+    if (salesCardNote) salesCardNote.textContent = cashierMode ? "Receipts completed by you today" : "Cumulative sales revenue";
+    if (salesOverviewPanel) salesOverviewPanel.hidden = cashierMode;
+    if (cashierShiftPanel) cashierShiftPanel.hidden = !cashierMode;
+    if (manageReordersLink) manageReordersLink.hidden = cashierMode;
+    if (recentSalesHeading) recentSalesHeading.textContent = cashierMode ? "My Recent Transactions" : "Recent Sales";
+    if (recentSalesSubheading) {
+        recentSalesSubheading.textContent = cashierMode
+            ? "Receipts processed under your cashier account"
+            : "Latest pharmacy transactions across all cashiers";
+    }
+    if (recentSalesViewAll) {
+        recentSalesViewAll.textContent = cashierMode ? "My History →" : "View All →";
+    }
+}
 
 function initializeDashboard() {
     updateDate();
+    applyDashboardRoleView();
 
     const salesPeriod = document.getElementById("salesPeriod");
-
     if (salesPeriod && salesPeriod.dataset.initialized !== "true") {
         salesPeriod.dataset.initialized = "true";
-
-        salesPeriod.addEventListener("change", function () {
-            const selected = chartData[salesPeriod.value];
-
-            if (!selected) return;
-
-            const chartTotal = document.getElementById("chartTotal");
-
-            if (chartTotal) {
-                chartTotal.textContent = selected.total;
-            }
-
-            document.querySelectorAll("#salesChart .bar")
-                .forEach(function (bar, index) {
-                    if (selected.bars[index] !== undefined) {
-                        bar.style.height = selected.bars[index] + "%";
-                    }
-                });
-        });
+        salesPeriod.addEventListener("change", renderSalesOverviewChart);
     }
+
+    renderSalesOverviewChart();
 }
 
 
@@ -270,6 +553,18 @@ if (globalSearch) {
             expirationSearch.value = globalSearch.value;
             renderExpirationMedicines();
         }
+
+        const cashierSearch = document.getElementById("cashierSearch");
+        if (cashierSearch) {
+            cashierSearch.value = globalSearch.value;
+            renderCashiers();
+        }
+
+        const logsSearch = document.getElementById("logsSearch");
+        if (logsSearch) {
+            logsSearch.value = globalSearch.value;
+            renderActivityLogs();
+        }
     });
 }
 
@@ -286,6 +581,7 @@ if (logoutButton) {
         );
 
         if (confirmed) {
+            recordLocalActivity("Auth", "Logged Out", `${getCurrentDisplayName()} (${getCurrentUsername()}) signed out`);
             if (window.EPharmaBranding && typeof window.EPharmaBranding.clearActiveSession === "function") {
                 window.EPharmaBranding.clearActiveSession();
             }
@@ -509,32 +805,40 @@ const pageTemplates = {
 sales: `
     <section class="page-heading">
         <div>
-            <p class="breadcrumb">Point of Sale / Sales</p>
+            <p class="breadcrumb" id="salesBreadcrumb">Point of Sale / Sales</p>
             <h1 id="salesPageTitle">Sales & Point of Sale</h1>
-            <p class="subtitle">Process customer purchases, apply discounts, calculate change, and view receipts.</p>
+            <p class="subtitle" id="salesPageSubtitle">Process customer purchases, apply discounts, calculate change, and view receipts.</p>
+        </div>
+        <div class="sales-report-controls">
+            <button type="button" class="inventory-button secondary" id="toggleAdminPosBtn" hidden>
+                + Optional POS Checkout
+            </button>
+            <button type="button" class="inventory-button" id="exportSalesCsvBtn" hidden>
+                ↓ Export Report (CSV)
+            </button>
         </div>
     </section>
 
     <section class="inventory-summary">
         <article class="inventory-summary-card">
-            <p>Today's Sales</p>
+            <p id="salesSummaryCard1Label">Today's Sales</p>
             <h3 id="salesTodayTotal">₱0.00</h3>
         </article>
         <article class="inventory-summary-card">
-            <p>Transactions Today</p>
+            <p id="salesSummaryCard2Label">Transactions</p>
             <h3 id="salesTransactionCount">0</h3>
         </article>
         <article class="inventory-summary-card">
-            <p>Units Sold Today</p>
+            <p id="salesSummaryCard3Label">Units Sold</p>
             <h3 id="salesItemsSold">0</h3>
         </article>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="posCheckoutSection">
         <div class="panel-heading">
             <div>
-                <h3>New POS Transaction</h3>
-                <p>Select a medicine, confirm discount, and enter payment details.</p>
+                <h3>POS Checkout</h3>
+                <p id="posCheckoutSubtitle">Select a medicine, confirm discount, and enter payment details.</p>
             </div>
         </div>
 
@@ -566,7 +870,6 @@ sales: `
                 <div class="discount-presets" id="salesDiscountPresets">
                     <button type="button" class="discount-chip" data-discount="inventory">Inventory Default</button>
                     <button type="button" class="discount-chip" data-discount="0">0%</button>
-                    <button type="button" class="discount-chip" data-discount="10">10%</button>
                     <button type="button" class="discount-chip" data-discount="20">20% Senior/PWD</button>
                 </div>
             </div>
@@ -629,16 +932,29 @@ sales: `
     <section class="panel">
         <div class="panel-heading">
             <div>
-                <h3>Sales Records</h3>
-                <p>Recent pharmacy transactions with applied discounts and cashier details.</p>
+                <h3 id="salesRecordsHeading">Sales Records</h3>
+                <p id="salesRecordsSubheading">Recent pharmacy transactions with applied discounts and cashier details.</p>
             </div>
         </div>
 
         <div class="inventory-toolbar">
             <input type="search" id="salesSearch"
                    class="inventory-search"
-                   placeholder="Search receipt, medicine, or cashier..."
+                   placeholder="Search receipt or medicine..."
                    aria-label="Search sales records">
+
+            <div class="inventory-actions">
+                <select class="inventory-filter" id="salesDateFilter">
+                    <option value="all">All Dates</option>
+                    <option value="today">Today</option>
+                    <option value="week">Last 7 Days</option>
+                    <option value="month">This Month</option>
+                </select>
+
+                <select class="inventory-filter" id="salesCashierFilter" hidden>
+                    <option value="all">All Cashiers</option>
+                </select>
+            </div>
         </div>
 
         <div class="table-wrapper">
@@ -1123,42 +1439,6 @@ settings: `
 
         <div class="panel settings-panel">
             <div class="settings-heading">
-                <div class="settings-icon">👤</div>
-                <div>
-                    <h2>Staff & Role Profiles</h2>
-                    <p>Update the displayed Administrator and Cashier names across the system.</p>
-                </div>
-            </div>
-
-            <form id="adminSettingsForm">
-                <div class="settings-form-grid">
-                    <div class="form-group">
-                        <label for="settingAdminName">Administrator Name</label>
-                        <input id="settingAdminName" type="text"
-                            value="Admin" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="settingAdminEmail">Administrator Email</label>
-                        <input id="settingAdminEmail" type="email"
-                            value="admin@example.com">
-                    </div>
-
-                    <div class="form-group">
-                        <label for="settingCashierName">Default Cashier Display Name</label>
-                        <input id="settingCashierName" type="text"
-                            value="Cashier" maxlength="120" required>
-                    </div>
-                </div>
-
-                <button type="submit" class="primary-btn">
-                    Save Staff Profiles
-                </button>
-            </form>
-        </div>
-
-        <div class="panel settings-panel">
-            <div class="settings-heading">
                 <div class="settings-icon">⚙️</div>
                 <div>
                     <h2>System Preferences</h2>
@@ -1194,6 +1474,247 @@ settings: `
     </section>
 `,
 
+cashiers: `
+    <section class="page-heading">
+        <div>
+            <p class="breadcrumb">Administration / Cashiers</p>
+            <h1>Cashier Management</h1>
+            <p class="subtitle">Create, edit, activate, or deactivate cashier POS accounts.</p>
+        </div>
+        <button type="button" class="inventory-button" id="addCashierBtn">+ Add Cashier</button>
+    </section>
+
+    <section class="inventory-summary">
+        <article class="inventory-summary-card">
+            <p>Total Accounts</p>
+            <h3 id="cashierTotalCount">0</h3>
+        </article>
+        <article class="inventory-summary-card">
+            <p>Active Cashiers</p>
+            <h3 id="cashierActiveCount">0</h3>
+        </article>
+        <article class="inventory-summary-card">
+            <p>Inactive Cashiers</p>
+            <h3 id="cashierInactiveCount">0</h3>
+        </article>
+    </section>
+
+    <section class="panel" id="cashierFormPanel" hidden>
+        <div class="panel-heading">
+            <div>
+                <h3 id="cashierFormTitle">Add New Cashier Account</h3>
+                <p>Set account credentials, display name, and status.</p>
+            </div>
+        </div>
+
+        <form id="cashierForm" class="inventory-form">
+            <input type="hidden" id="cashierUserId">
+
+            <div class="form-field">
+                <label for="cashierFullName">Full Name *</label>
+                <input id="cashierFullName" maxlength="120" placeholder="e.g., Maria Santos" required>
+            </div>
+
+            <div class="form-field">
+                <label for="cashierUsername">Username *</label>
+                <input id="cashierUsername" maxlength="50" placeholder="e.g., maria" required>
+            </div>
+
+            <div class="form-field">
+                <label for="cashierEmail">Email Address</label>
+                <input id="cashierEmail" type="email" maxlength="150" placeholder="e.g., maria@example.com">
+            </div>
+
+            <div class="form-field">
+                <label for="cashierStatus">Status</label>
+                <select id="cashierStatus">
+                    <option value="Active">Active</option>
+                    <option value="Inactive">Inactive</option>
+                </select>
+            </div>
+
+            <div class="form-field form-full">
+                <label for="cashierPassword" id="cashierPasswordLabel">Password * (min 6 characters)</label>
+                <input id="cashierPassword" type="password" minlength="6" placeholder="Enter password">
+            </div>
+
+            <div class="form-buttons">
+                <button type="button" class="inventory-button secondary" id="cancelCashierBtn">Cancel</button>
+                <button type="submit" class="inventory-button">Save Cashier</button>
+            </div>
+        </form>
+    </section>
+
+    <section class="panel">
+        <div class="inventory-toolbar">
+            <input type="search" id="cashierSearch" class="inventory-search" placeholder="Search cashier name or username...">
+        </div>
+
+        <div class="table-wrapper">
+            <table class="inventory-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Full Name</th>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="cashiersBody"></tbody>
+            </table>
+        </div>
+
+        <p id="cashiersMessage" class="inventory-message" role="status"></p>
+    </section>
+`,
+
+logs: `
+    <section class="page-heading">
+        <div>
+            <p class="breadcrumb">Administration / Activity Logs</p>
+            <h1>Activity Logs</h1>
+            <p class="subtitle">Audit trail of logins, sales, inventory edits, purchases, and account updates.</p>
+        </div>
+    </section>
+
+    <section class="inventory-summary">
+        <article class="inventory-summary-card">
+            <p>Recorded Events</p>
+            <h3 id="logTotalCount">0</h3>
+        </article>
+        <article class="inventory-summary-card">
+            <p>Admin Events</p>
+            <h3 id="logAdminCount">0</h3>
+        </article>
+        <article class="inventory-summary-card">
+            <p>Cashier Events</p>
+            <h3 id="logCashierCount">0</h3>
+        </article>
+    </section>
+
+    <section class="panel">
+        <div class="inventory-toolbar">
+            <input type="search" id="logsSearch" class="inventory-search" placeholder="Search user, action, or details...">
+
+            <div class="inventory-actions">
+                <select class="inventory-filter" id="logsRoleFilter">
+                    <option value="all">All Roles</option>
+                    <option value="admin">Admin Only</option>
+                    <option value="cashier">Cashier Only</option>
+                </select>
+
+                <select class="inventory-filter" id="logsModuleFilter">
+                    <option value="all">All Modules</option>
+                    <option value="Auth">Auth</option>
+                    <option value="Sales">Sales</option>
+                    <option value="Inventory">Inventory</option>
+                    <option value="Purchase">Purchase</option>
+                    <option value="Suppliers">Suppliers</option>
+                    <option value="Cashiers">Cashiers</option>
+                    <option value="Account">Account</option>
+                    <option value="Settings">Settings</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+            <table class="inventory-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>User</th>
+                        <th>Role</th>
+                        <th>Module</th>
+                        <th>Action</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody id="activityLogsBody"></tbody>
+            </table>
+        </div>
+    </section>
+`,
+
+account: `
+    <section class="page-heading">
+        <div>
+            <p class="breadcrumb">Account / My Account</p>
+            <h1>My Account</h1>
+            <p class="subtitle">Update your personal profile details and account password.</p>
+        </div>
+    </section>
+
+    <section class="account-grid">
+        <article class="panel">
+            <div class="panel-heading">
+                <div>
+                    <h3>Profile Information</h3>
+                    <p>Manage your display name and contact email.</p>
+                </div>
+                <span class="role-badge role-badge--admin" id="accountRoleBadge">Admin</span>
+            </div>
+
+            <form id="accountProfileForm" class="inventory-form">
+                <div class="form-field form-full">
+                    <label for="accountUsername">Username</label>
+                    <input id="accountUsername" type="text" readonly>
+                </div>
+
+                <div class="form-field form-full">
+                    <label for="accountFullName">Full Name *</label>
+                    <input id="accountFullName" type="text" maxlength="120" required>
+                </div>
+
+                <div class="form-field form-full">
+                    <label for="accountEmail">Email Address</label>
+                    <input id="accountEmail" type="email" maxlength="150" placeholder="you@example.com">
+                </div>
+
+                <div class="form-buttons">
+                    <button type="submit" class="inventory-button">Save Profile</button>
+                </div>
+            </form>
+
+            <p id="accountProfileMessage" class="inventory-message" role="status"></p>
+        </article>
+
+        <article class="panel">
+            <div class="panel-heading">
+                <div>
+                    <h3>Change Password</h3>
+                    <p>Use a strong password with at least 6 characters.</p>
+                </div>
+            </div>
+
+            <form id="accountPasswordForm" class="inventory-form">
+                <div class="form-field form-full">
+                    <label for="accountCurrentPassword">Current Password *</label>
+                    <input id="accountCurrentPassword" type="password" required>
+                </div>
+
+                <div class="form-field form-full">
+                    <label for="accountNewPassword">New Password *</label>
+                    <input id="accountNewPassword" type="password" minlength="6" required>
+                </div>
+
+                <div class="form-field form-full">
+                    <label for="accountConfirmPassword">Confirm New Password *</label>
+                    <input id="accountConfirmPassword" type="password" minlength="6" required>
+                </div>
+
+                <div class="form-buttons">
+                    <button type="submit" class="inventory-button">Update Password</button>
+                </div>
+            </form>
+
+            <p id="accountPasswordMessage" class="inventory-message" role="status"></p>
+        </article>
+    </section>
+`,
+
 };
 
 
@@ -1207,7 +1728,7 @@ function showPage(pageName) {
     if (!pageContent) return;
 
     if (!canAccessPage(pageName)) {
-        pageName = isCashierRole() ? "sales" : "dashboard";
+        pageName = "dashboard";
     }
 
     if (pageName === "dashboard") {
@@ -1268,8 +1789,17 @@ function showPage(pageName) {
     if (pageName === "expiration") {
         initializeExpirationPage();
     }
+    if (pageName === "cashiers") {
+        initializeCashiersPage();
+    }
+    if (pageName === "logs") {
+        initializeActivityLogsPage();
+    }
     if (pageName === "settings") {
         initializeSettingsPage();
+    }
+    if (pageName === "account") {
+        initializeAccountPage();
     }
 
     // Close mobile sidebar after selecting a page.
@@ -1713,6 +2243,7 @@ async function deleteMedicine(id) {
         if (isServerDbUnavailable(response, result)) {
             isDemoDatabaseMode = true;
             inventoryMedicines = inventoryMedicines.filter(item => item.id !== Number(id));
+            recordLocalActivity("Inventory", "Deleted Medicine", `Removed ${medicine.name}`);
             renderInventory();
             refreshDashboardStats();
             showInventoryMessage(`${medicine.name} removed (Demo preview mode).`);
@@ -1895,6 +2426,7 @@ async function initializeInventoryPage() {
                         existing.quantity = quantity;
                         existing.reorderLevel = reorderLevel;
                     }
+                    recordLocalActivity("Inventory", "Updated Medicine", `Updated ${name} (₱${price.toFixed(2)}, ${discount}% off, Qty: ${quantity})`);
                 } else {
                     inventoryMedicines.push({
                         id: nextMedicineId++,
@@ -1905,6 +2437,7 @@ async function initializeInventoryPage() {
                         quantity,
                         reorderLevel
                     });
+                    recordLocalActivity("Inventory", "Added Medicine", `Added ${name} (₱${price.toFixed(2)}, Qty: ${quantity})`);
                 }
 
                 document.getElementById("medicineFormPanel").hidden = true;
@@ -1945,22 +2478,111 @@ async function initializeInventoryPage() {
 }
 
 
-
-// =========================================
-// 18. INITIALIZE DASHBOARD ON PAGE LOAD
-// =========================================
-
-initializeDashboard();
-
-
 /* =========================================
-   E-PHARMA SALES MANAGEMENT
-   Demo session only
+   E-PHARMA SALES MANAGEMENT & REPORTS
 ========================================= */
 
+function createDemoSalesRecords() {
+    const now = new Date();
+    function daysAgo(days, hour = 10) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days, hour, 15, 0);
+        return {
+            ts: d.getTime(),
+            str: d.toLocaleString("en-PH")
+        };
+    }
 
-let salesRecords = [];
-let nextReceiptNumber = 1;
+    const s6 = daysAgo(0, Math.max(8, now.getHours() - 1));
+    const s5 = daysAgo(0, Math.max(8, now.getHours() - 2));
+    const s4 = daysAgo(1, 14);
+    const s3 = daysAgo(2, 11);
+    const s2 = daysAgo(4, 16);
+    const s1 = daysAgo(6, 9);
+
+    return [
+        {
+            receipt: "EP-0006",
+            date: s6.str,
+            timestamp: s6.ts,
+            cashierUsername: "cashier",
+            cashierName: "Cashier 1 (Alex Reyes)",
+            medicineName: "Vitamin C 500mg",
+            quantity: 5,
+            originalPrice: 4.00,
+            discount: 20,
+            unitPrice: 3.20,
+            total: 16.00
+        },
+        {
+            receipt: "EP-0005",
+            date: s5.str,
+            timestamp: s5.ts,
+            cashierUsername: "cashier2",
+            cashierName: "Cashier 2 (Maria Santos)",
+            medicineName: "Amoxicillin 500mg",
+            quantity: 4,
+            originalPrice: 8.00,
+            discount: 0,
+            unitPrice: 8.00,
+            total: 32.00
+        },
+        {
+            receipt: "EP-0004",
+            date: s4.str,
+            timestamp: s4.ts,
+            cashierUsername: "cashier",
+            cashierName: "Cashier 1 (Alex Reyes)",
+            medicineName: "Paracetamol 500mg",
+            quantity: 20,
+            originalPrice: 5.00,
+            discount: 0,
+            unitPrice: 5.00,
+            total: 100.00
+        },
+        {
+            receipt: "EP-0003",
+            date: s3.str,
+            timestamp: s3.ts,
+            cashierUsername: "cashier2",
+            cashierName: "Cashier 2 (Maria Santos)",
+            medicineName: "Ibuprofen 400mg",
+            quantity: 12,
+            originalPrice: 12.00,
+            discount: 0,
+            unitPrice: 12.00,
+            total: 144.00
+        },
+        {
+            receipt: "EP-0002",
+            date: s2.str,
+            timestamp: s2.ts,
+            cashierUsername: "cashier",
+            cashierName: "Cashier 1 (Alex Reyes)",
+            medicineName: "Cetirizine 10mg",
+            quantity: 15,
+            originalPrice: 6.50,
+            discount: 10,
+            unitPrice: 5.85,
+            total: 87.75
+        },
+        {
+            receipt: "EP-0001",
+            date: s1.str,
+            timestamp: s1.ts,
+            cashierUsername: "admin",
+            cashierName: "Administrator",
+            medicineName: "Paracetamol 500mg",
+            quantity: 30,
+            originalPrice: 5.00,
+            discount: 0,
+            unitPrice: 5.00,
+            total: 150.00
+        }
+    ];
+}
+
+let salesRecords = createDemoSalesRecords();
+let nextReceiptNumber = 7;
 
 function showSalesMessage(text, isError = false) {
     const message = document.getElementById("salesMessage");
@@ -2008,6 +2630,116 @@ function renderPosReceipt(receiptInfo) {
     card.hidden = false;
 }
 
+function populateSalesCashierFilter() {
+    const select = document.getElementById("salesCashierFilter");
+    if (!select || isCashierRole()) return;
+
+    const currentVal = select.value || "all";
+    const map = new Map();
+
+    salesRecords.forEach(sale => {
+        const uname = sale.cashierUsername || "";
+        const label = sale.cashierName || uname || "Staff";
+        if (uname && !map.has(uname)) {
+            map.set(uname, label);
+        } else if (!uname && label && !map.has(label)) {
+            map.set(label, label);
+        }
+    });
+
+    select.innerHTML = '<option value="all">All Cashiers</option>';
+    map.forEach((label, key) => {
+        const opt = document.createElement("option");
+        opt.value = key;
+        opt.textContent = label;
+        select.appendChild(opt);
+    });
+
+    if ([...select.options].some(o => o.value === currentVal)) {
+        select.value = currentVal;
+    }
+}
+
+function getFilteredSalesRecords() {
+    const cashierMode = isCashierRole();
+    const myUsername = getCurrentUsername();
+    const search = (document.getElementById("salesSearch")?.value || "").trim().toLowerCase();
+    const dateFilter = document.getElementById("salesDateFilter")?.value || "all";
+    const cashierFilter = cashierMode
+        ? myUsername
+        : (document.getElementById("salesCashierFilter")?.value || "all");
+
+    const now = new Date();
+    const weekCutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).getTime();
+
+    return salesRecords.filter(function (sale) {
+        if (cashierMode) {
+            if ((sale.cashierUsername || "").toLowerCase() !== myUsername.toLowerCase()) {
+                return false;
+            }
+        } else if (cashierFilter !== "all") {
+            const matchKey = (sale.cashierUsername || sale.cashierName || "").toLowerCase();
+            if (matchKey !== cashierFilter.toLowerCase()) return false;
+        }
+
+        const d = new Date(sale.timestamp);
+        if (dateFilter === "today") {
+            if (
+                d.getFullYear() !== now.getFullYear() ||
+                d.getMonth() !== now.getMonth() ||
+                d.getDate() !== now.getDate()
+            ) {
+                return false;
+            }
+        } else if (dateFilter === "week") {
+            if (sale.timestamp < weekCutoff) return false;
+        } else if (dateFilter === "month") {
+            if (d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth()) {
+                return false;
+            }
+        }
+
+        if (search) {
+            const hay = `${sale.receipt} ${sale.medicineName} ${sale.cashierName || ""} ${sale.cashierUsername || ""}`.toLowerCase();
+            if (!hay.includes(search)) return false;
+        }
+
+        return true;
+    });
+}
+
+function exportSalesReportCsv() {
+    if (isCashierRole()) return;
+    const rows = getFilteredSalesRecords();
+    const headers = ["Receipt No", "Date", "Cashier", "Username", "Medicine", "Quantity", "Unit Price", "Discount %", "Total"];
+    const csvLines = [headers.join(",")];
+
+    rows.forEach(r => {
+        const line = [
+            r.receipt,
+            r.date,
+            r.cashierName || "Admin",
+            r.cashierUsername || "",
+            r.medicineName,
+            r.quantity,
+            Number(r.unitPrice).toFixed(2),
+            normalizeDiscountPercent(r.discount),
+            Number(r.total).toFixed(2)
+        ].map(val => `"${String(val).replace(/"/g, '""')}"`).join(",");
+        csvLines.push(line);
+    });
+
+    const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `epharma-sales-report-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+}
+
 async function initializeSalesPage() {
     const form = document.getElementById("salesForm");
 
@@ -2015,11 +2747,60 @@ async function initializeSalesPage() {
 
     form.dataset.initialized = "true";
 
+    const cashierMode = isCashierRole();
+    const breadcrumbEl = document.getElementById("salesBreadcrumb");
     const titleEl = document.getElementById("salesPageTitle");
-    if (titleEl) {
-        titleEl.textContent = isCashierRole()
-            ? "Cashier Point of Sale"
-            : "Sales & Point of Sale";
+    const subtitleEl = document.getElementById("salesPageSubtitle");
+    const posSection = document.getElementById("posCheckoutSection");
+    const togglePosBtn = document.getElementById("toggleAdminPosBtn");
+    const exportCsvBtn = document.getElementById("exportSalesCsvBtn");
+    const cashierFilter = document.getElementById("salesCashierFilter");
+    const recordsHeading = document.getElementById("salesRecordsHeading");
+    const recordsSubheading = document.getElementById("salesRecordsSubheading");
+    const card1Label = document.getElementById("salesSummaryCard1Label");
+    const card2Label = document.getElementById("salesSummaryCard2Label");
+    const card3Label = document.getElementById("salesSummaryCard3Label");
+
+    if (cashierMode) {
+        if (breadcrumbEl) breadcrumbEl.textContent = "Point of Sale / POS & My Sales";
+        if (titleEl) titleEl.textContent = "POS Checkout & My Receipts";
+        if (subtitleEl) subtitleEl.textContent = "Process customer checkout, print receipts, and view your own transaction history.";
+        if (posSection) posSection.hidden = false;
+        if (togglePosBtn) togglePosBtn.hidden = true;
+        if (exportCsvBtn) exportCsvBtn.hidden = true;
+        if (cashierFilter) cashierFilter.hidden = true;
+        if (recordsHeading) recordsHeading.textContent = "My Transaction History";
+        if (recordsSubheading) recordsSubheading.textContent = "Transactions processed under your cashier account.";
+        if (card1Label) card1Label.textContent = "My Sales Total";
+        if (card2Label) card2Label.textContent = "My Transactions";
+        if (card3Label) card3Label.textContent = "Units Dispensed";
+    } else {
+        if (breadcrumbEl) breadcrumbEl.textContent = "Reports / Sales Reports";
+        if (titleEl) titleEl.textContent = "Sales Reports (All Cashiers)";
+        if (subtitleEl) subtitleEl.textContent = "Inspect pharmacy sales performance across all cashiers, filter by period, or open optional POS.";
+        if (posSection) posSection.hidden = pendingSaleMedicineId === null;
+        if (togglePosBtn) {
+            togglePosBtn.hidden = false;
+            togglePosBtn.textContent = posSection && !posSection.hidden ? "− Hide Optional POS" : "+ Optional POS Checkout";
+        }
+        if (exportCsvBtn) exportCsvBtn.hidden = false;
+        if (cashierFilter) cashierFilter.hidden = false;
+        if (recordsHeading) recordsHeading.textContent = "All Cashier Sales Report";
+        if (recordsSubheading) recordsSubheading.textContent = "Filter by cashier, date period, receipt, or medicine.";
+        if (card1Label) card1Label.textContent = "Report Revenue";
+        if (card2Label) card2Label.textContent = "Transactions";
+        if (card3Label) card3Label.textContent = "Units Sold";
+    }
+
+    if (togglePosBtn && posSection) {
+        togglePosBtn.addEventListener("click", function () {
+            posSection.hidden = !posSection.hidden;
+            togglePosBtn.textContent = posSection.hidden ? "+ Optional POS Checkout" : "− Hide Optional POS";
+        });
+    }
+
+    if (exportCsvBtn) {
+        exportCsvBtn.addEventListener("click", exportSalesReportCsv);
     }
 
     const medicineSelect = document.getElementById("salesMedicine");
@@ -2028,7 +2809,14 @@ async function initializeSalesPage() {
     const discountPresets = document.getElementById("salesDiscountPresets");
     const cashInput = document.getElementById("salesCashReceived");
     const searchInput = document.getElementById("salesSearch");
+    const dateFilterSelect = document.getElementById("salesDateFilter");
     const printBtn = document.getElementById("printReceiptBtn");
+
+    // Cashiers cannot edit medicine pricing/discount rules freely — they use Inventory Default, 0%, or Senior/PWD 20%.
+    if (discountInput && cashierMode) {
+        discountInput.readOnly = true;
+        discountInput.title = "Discounts use Inventory Default or 20% Senior/PWD preset (Admin configures inventory discounts).";
+    }
 
     async function loadSalesMedicines() {
         await loadMedicinesFromDatabase();
@@ -2055,6 +2843,7 @@ async function initializeSalesPage() {
         if (pendingSaleMedicineId !== null) {
             medicineSelect.value = String(pendingSaleMedicineId);
             pendingSaleMedicineId = null;
+            if (posSection) posSection.hidden = false;
             applyMedicineDefaultDiscount();
             quantityInput.focus();
         } else if (previousValue) {
@@ -2136,7 +2925,7 @@ async function initializeSalesPage() {
         updateSaleTotal();
     });
     quantityInput.addEventListener("input", updateSaleTotal);
-    if (discountInput) discountInput.addEventListener("input", updateSaleTotal);
+    if (discountInput && !cashierMode) discountInput.addEventListener("input", updateSaleTotal);
     if (cashInput) cashInput.addEventListener("input", updateSaleTotal);
 
     if (discountPresets && discountInput) {
@@ -2165,7 +2954,9 @@ async function initializeSalesPage() {
         }, 0);
     });
 
-    searchInput.addEventListener("input", renderSalesRecords);
+    if (searchInput) searchInput.addEventListener("input", renderSalesRecords);
+    if (dateFilterSelect) dateFilterSelect.addEventListener("change", renderSalesRecords);
+    if (cashierFilter) cashierFilter.addEventListener("change", renderSalesRecords);
 
     form.addEventListener("submit", async function (event) {
         event.preventDefault();
@@ -2215,6 +3006,7 @@ async function initializeSalesPage() {
         }
 
         const cashierName = getCurrentDisplayName();
+        const cashierUsername = getCurrentUsername();
 
         const confirmed = confirm(
             "Complete this sale?\n\n" +
@@ -2243,7 +3035,8 @@ async function initializeSalesPage() {
                     medicine_id: medicine.id,
                     quantity: quantity,
                     discount_percent: discount,
-                    cashier_name: cashierName
+                    cashier_name: cashierName,
+                    cashier_username: cashierUsername
                 })
             });
 
@@ -2261,6 +3054,7 @@ async function initializeSalesPage() {
                     receipt: receiptNo,
                     date: dateStr,
                     timestamp: now.getTime(),
+                    cashierUsername,
                     cashierName,
                     medicineName: medicine.name,
                     quantity,
@@ -2269,6 +3063,12 @@ async function initializeSalesPage() {
                     unitPrice: finalUnitPrice,
                     total
                 });
+
+                recordLocalActivity(
+                    "Sales",
+                    "Completed Sale",
+                    `Receipt ${receiptNo}: ${medicine.name} x${quantity} (₱${total.toFixed(2)})`
+                );
 
                 renderPosReceipt({
                     receipt: receiptNo,
@@ -2284,6 +3084,7 @@ async function initializeSalesPage() {
                 });
 
                 await loadSalesMedicines();
+                populateSalesCashierFilter();
                 renderSalesRecords();
                 form.reset();
                 updateSaleTotal();
@@ -2322,7 +3123,6 @@ async function initializeSalesPage() {
                     : 0
             });
 
-            // Reload stock & sales from MySQL after successful sale.
             await loadSalesMedicines();
             await loadSalesRecordsFromDatabase();
 
@@ -2350,6 +3150,7 @@ async function initializeSalesPage() {
 
     await loadSalesMedicines();
     await loadSalesRecordsFromDatabase();
+    populateSalesCashierFilter();
     updateSaleTotal();
 
     renderSalesRecords();
@@ -2360,42 +3161,17 @@ function renderSalesRecords() {
 
     if (!tbody) return;
 
-    const search = (
-        document.getElementById("salesSearch")?.value || ""
-    ).trim().toLowerCase();
+    const filteredRecords = getFilteredSalesRecords();
+    const totalAmount = filteredRecords.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    const itemsSold = filteredRecords.reduce((sum, sale) => sum + Number(sale.quantity || 0), 0);
 
-    const today = new Date();
+    const totalEl = document.getElementById("salesTodayTotal");
+    const countEl = document.getElementById("salesTransactionCount");
+    const unitsEl = document.getElementById("salesItemsSold");
 
-    const todaysSales = salesRecords.filter(function (sale) {
-        const date = new Date(sale.timestamp);
-
-        return date.getFullYear() === today.getFullYear() &&
-            date.getMonth() === today.getMonth() &&
-            date.getDate() === today.getDate();
-    });
-
-    const todayTotal = todaysSales.reduce(function (sum, sale) {
-        return sum + sale.total;
-    }, 0);
-
-    const itemsSold = todaysSales.reduce(function (sum, sale) {
-        return sum + sale.quantity;
-    }, 0);
-
-    document.getElementById("salesTodayTotal").textContent =
-        "₱" + todayTotal.toFixed(2);
-
-    document.getElementById("salesTransactionCount").textContent =
-        String(todaysSales.length);
-
-    document.getElementById("salesItemsSold").textContent =
-        String(itemsSold);
-
-    const filteredRecords = salesRecords.filter(function (sale) {
-        return sale.receipt.toLowerCase().includes(search) ||
-            sale.medicineName.toLowerCase().includes(search) ||
-            (sale.cashierName || "").toLowerCase().includes(search);
-    });
+    if (totalEl) totalEl.textContent = "₱" + totalAmount.toFixed(2);
+    if (countEl) countEl.textContent = String(filteredRecords.length);
+    if (unitsEl) unitsEl.textContent = String(itemsSold);
 
     tbody.innerHTML = "";
 
@@ -2405,7 +3181,9 @@ function renderSalesRecords() {
 
         cell.colSpan = 8;
         cell.className = "inventory-empty";
-        cell.textContent = "No sales records found.";
+        cell.textContent = isCashierRole()
+            ? "No transactions found for your account."
+            : "No sales records match the current report filters.";
 
         row.appendChild(cell);
         tbody.appendChild(row);
@@ -2591,8 +3369,9 @@ async function initializePurchasePage() {
             if (isServerDbUnavailable(response, result)) {
                 isDemoDatabaseMode = true;
                 const purchaseId = nextPurchaseNumber++;
+                const purchaseNo = "PUR-" + String(purchaseId).padStart(4, "0");
                 purchaseRecords.unshift({
-                    purchaseNo: "PUR-" + String(purchaseId).padStart(4, "0"),
+                    purchaseNo,
                     date: new Date().toLocaleString("en-PH"),
                     medicineId: medicine.id,
                     medicineName: medicine.name,
@@ -2602,6 +3381,7 @@ async function initializePurchasePage() {
                     total,
                     status: "Pending"
                 });
+                recordLocalActivity("Purchase", "Created Purchase", `${purchaseNo}: ${medicine.name} x${quantity} from ${supplier}`);
                 form.reset();
                 updatePurchaseTotal();
                 renderPurchaseRecords();
@@ -2847,6 +3627,7 @@ async function initializeSuppliersPage() {
                         existing.address = supplier.address;
                         existing.status = supplier.status;
                     }
+                    recordLocalActivity("Suppliers", "Updated Supplier", `Updated ${supplier.supplier_name}`);
                 } else {
                     supplierRecords.unshift({
                         id: nextSupplierId++,
@@ -2857,6 +3638,7 @@ async function initializeSuppliersPage() {
                         address: supplier.address,
                         status: supplier.status
                     });
+                    recordLocalActivity("Suppliers", "Added Supplier", `Added ${supplier.supplier_name}`);
                 }
                 form.reset();
                 form.style.display = "none";
@@ -2937,6 +3719,7 @@ async function initializeSuppliersPage() {
                 if (isServerDbUnavailable(response, result)) {
                     isDemoDatabaseMode = true;
                     supplierRecords = supplierRecords.filter(item => item.id !== id);
+                    recordLocalActivity("Suppliers", "Deleted Supplier", `Removed ${supplier.name}`);
                     renderSuppliers();
                     showSupplierMessage("Supplier removed in local preview mode.");
                     return;
@@ -3232,7 +4015,7 @@ async function initializeSettingsPage() {
     const adminForm = document.getElementById("adminSettingsForm");
     const systemForm = document.getElementById("systemSettingsForm");
 
-    if (!pharmacyForm || !adminForm || !systemForm) return;
+    if (!pharmacyForm || !systemForm) return;
 
     const branding = window.EPharmaBranding;
     if (!branding) {
@@ -3419,6 +4202,7 @@ async function initializeSettingsPage() {
         try {
             const result = await branding.saveSettings(payload);
             populateFields(result.settings);
+            recordLocalActivity("Settings", "Updated Pharmacy Info", `Saved settings for ${pharmacyName}`);
             const msg = "Pharmacy information saved. Name and logo updated across the web!";
             setInlineStatus(msg, false);
             showSettingsMessage(msg, false);
@@ -3431,26 +4215,28 @@ async function initializeSettingsPage() {
         }
     };
 
-    adminForm.onsubmit = async function (event) {
-        event.preventDefault();
-        const adminName = adminNameInput ? adminNameInput.value.trim() : "";
-        const cashierName = cashierNameInput ? cashierNameInput.value.trim() : "Cashier";
-        if (!adminName) {
-            showSettingsMessage("Please enter the administrator name.", true);
-            return;
-        }
-        if (!cashierName) {
-            showSettingsMessage("Please enter the cashier display name.", true);
-            return;
-        }
+    if (adminForm) {
+        adminForm.onsubmit = async function (event) {
+            event.preventDefault();
+            const adminName = adminNameInput ? adminNameInput.value.trim() : "";
+            const cashierName = cashierNameInput ? cashierNameInput.value.trim() : "Cashier";
+            if (!adminName) {
+                showSettingsMessage("Please enter the administrator name.", true);
+                return;
+            }
+            if (!cashierName) {
+                showSettingsMessage("Please enter the cashier display name.", true);
+                return;
+            }
 
-        await branding.saveSettings({
-            adminName,
-            adminEmail: adminEmailInput ? adminEmailInput.value.trim() : "",
-            cashierName
-        });
-        showSettingsMessage("Staff profiles saved.", false);
-    };
+            await branding.saveSettings({
+                adminName,
+                adminEmail: adminEmailInput ? adminEmailInput.value.trim() : "",
+                cashierName
+            });
+            showSettingsMessage("Staff profiles saved.", false);
+        };
+    }
 
     systemForm.onsubmit = async function (event) {
         event.preventDefault();
@@ -3464,6 +4250,7 @@ async function initializeSettingsPage() {
             dateFormat: dateFormatInput ? dateFormatInput.value : "MM/DD/YYYY",
             lowStockLevel: lowStock
         });
+        recordLocalActivity("Settings", "Updated Preferences", `Low stock threshold set to ${lowStock}`);
         showSettingsMessage("System preferences saved.", false);
     };
 }
@@ -3474,6 +4261,552 @@ function showSettingsMessage(message, isError) {
 
     box.textContent = message;
     box.style.color = isError ? "#b91c1c" : "#0f766e";
+}
+
+/* =========================================
+   ADMIN: CASHIER MANAGEMENT PAGE
+========================================= */
+
+let cashierUsers = [];
+
+function showCashierMessage(text, isError = false) {
+    const box = document.getElementById("cashiersMessage");
+    if (!box) return;
+    box.textContent = text;
+    box.style.color = isError ? "#B91C1C" : "#067D70";
+}
+
+async function loadUsersForManagement() {
+    const branding = window.EPharmaBranding;
+    try {
+        const response = await fetch("/api/users");
+        const rows = await response.json().catch(() => ({}));
+        if (isServerDbUnavailable(response, rows)) {
+            isDemoDatabaseMode = true;
+            cashierUsers = branding ? branding.getDemoUsers() : [];
+            renderCashiers();
+            return;
+        }
+        if (!response.ok) {
+            throw new Error(rows.message || "Unable to load accounts.");
+        }
+        cashierUsers = Array.isArray(rows) ? rows : [];
+        renderCashiers();
+    } catch (error) {
+        console.error("Load users error:", error);
+        cashierUsers = branding ? branding.getDemoUsers() : [];
+        renderCashiers();
+    }
+}
+
+function renderCashiers() {
+    const tbody = document.getElementById("cashiersBody");
+    if (!tbody) return;
+
+    const search = (document.getElementById("cashierSearch")?.value || "").trim().toLowerCase();
+
+    const cashierAccounts = cashierUsers.filter(u => u.role === "cashier");
+    const totalEl = document.getElementById("cashierTotalCount");
+    const activeEl = document.getElementById("cashierActiveCount");
+    const inactiveEl = document.getElementById("cashierInactiveCount");
+
+    if (totalEl) totalEl.textContent = String(cashierUsers.length);
+    if (activeEl) activeEl.textContent = String(cashierAccounts.filter(u => u.status === "Active").length);
+    if (inactiveEl) inactiveEl.textContent = String(cashierAccounts.filter(u => u.status !== "Active").length);
+
+    const filtered = cashierUsers.filter(u => {
+        const hay = `${u.full_name} ${u.username} ${u.email || ""} ${u.role} ${u.status}`.toLowerCase();
+        return hay.includes(search);
+    });
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="inventory-empty">No matching user accounts found.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(u => {
+        const isPrimaryAdmin = u.username === "admin";
+        const isActive = u.status === "Active";
+        const toggleLabel = isActive ? "Deactivate" : "Activate";
+        return `
+            <tr>
+                <td>USR-${String(u.user_id).padStart(3, "0")}</td>
+                <td><strong>${escapeSupplierText(u.full_name)}</strong></td>
+                <td>${escapeSupplierText(u.username)}</td>
+                <td><span class="badge ${u.role === "admin" ? "role-admin" : "role-cashier"}">${escapeSupplierText(u.role)}</span></td>
+                <td>${escapeSupplierText(u.email || "-")}</td>
+                <td><span class="status-badge ${isActive ? "status-in-stock" : "status-out-of-stock"}">${escapeSupplierText(u.status)}</span></td>
+                <td>
+                    <div class="action-buttons">
+                        <button type="button" data-cashier-action="edit" data-id="${u.user_id}">Edit</button>
+                        ${!isPrimaryAdmin ? `<button type="button" data-cashier-action="toggle" data-id="${u.user_id}">${toggleLabel}</button>` : ""}
+                        ${!isPrimaryAdmin && u.role === "cashier" ? `<button type="button" class="delete-button" data-cashier-action="delete" data-id="${u.user_id}">Delete</button>` : ""}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join("");
+}
+
+async function initializeCashiersPage() {
+    if (isCashierRole()) return;
+
+    const form = document.getElementById("cashierForm");
+    const panel = document.getElementById("cashierFormPanel");
+    const addBtn = document.getElementById("addCashierBtn");
+    const cancelBtn = document.getElementById("cancelCashierBtn");
+    const searchInput = document.getElementById("cashierSearch");
+    const tbody = document.getElementById("cashiersBody");
+
+    if (!form || form.dataset.initialized === "true") return;
+    form.dataset.initialized = "true";
+
+    const idField = document.getElementById("cashierUserId");
+    const nameField = document.getElementById("cashierFullName");
+    const usernameField = document.getElementById("cashierUsername");
+    const emailField = document.getElementById("cashierEmail");
+    const statusField = document.getElementById("cashierStatus");
+    const passwordField = document.getElementById("cashierPassword");
+    const passwordLabel = document.getElementById("cashierPasswordLabel");
+    const formTitle = document.getElementById("cashierFormTitle");
+
+    function openCashierForm(user = null) {
+        form.reset();
+        if (user) {
+            formTitle.textContent = `Edit Account: ${user.username}`;
+            idField.value = String(user.user_id);
+            nameField.value = user.full_name || "";
+            usernameField.value = user.username || "";
+            usernameField.readOnly = true;
+            emailField.value = user.email || "";
+            statusField.value = user.status || "Active";
+            passwordField.required = false;
+            passwordField.value = "";
+            passwordLabel.textContent = "New Password (leave blank to keep current)";
+        } else {
+            formTitle.textContent = "Add New Cashier Account";
+            idField.value = "";
+            usernameField.readOnly = false;
+            statusField.value = "Active";
+            passwordField.required = true;
+            passwordLabel.textContent = "Password * (min 6 characters)";
+        }
+        panel.hidden = false;
+        nameField.focus();
+    }
+
+    if (addBtn) addBtn.addEventListener("click", () => openCashierForm(null));
+    if (cancelBtn) cancelBtn.addEventListener("click", () => {
+        panel.hidden = true;
+        form.reset();
+    });
+    if (searchInput) searchInput.addEventListener("input", renderCashiers);
+
+    form.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        const editingId = idField.value ? Number(idField.value) : null;
+        const fullName = nameField.value.trim();
+        const username = usernameField.value.trim().toLowerCase();
+        const email = emailField.value.trim();
+        const status = statusField.value;
+        const password = passwordField.value;
+
+        if (!fullName || !username) {
+            showCashierMessage("Full name and username are required.", true);
+            return;
+        }
+        if (!editingId && (!password || password.length < 6)) {
+            showCashierMessage("Password must be at least 6 characters.", true);
+            return;
+        }
+        if (editingId && password && password.length < 6) {
+            showCashierMessage("New password must be at least 6 characters.", true);
+            return;
+        }
+
+        const branding = window.EPharmaBranding;
+        try {
+            const url = editingId ? `/api/users/${editingId}` : "/api/users";
+            const payload = {
+                full_name: fullName,
+                username,
+                email,
+                role: "cashier",
+                status
+            };
+            if (password) payload.password = password;
+
+            const response = await fetch(url, {
+                method: editingId ? "PUT" : "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json().catch(() => ({}));
+
+            if (isServerDbUnavailable(response, result)) {
+                isDemoDatabaseMode = true;
+                const demoList = branding ? branding.getDemoUsers() : cashierUsers;
+                if (editingId) {
+                    const target = demoList.find(u => Number(u.user_id) === editingId);
+                    if (target) {
+                        target.full_name = fullName;
+                        target.email = email;
+                        if (target.username !== "admin") target.status = status;
+                        if (password) target.password = password;
+                    }
+                    recordLocalActivity("Cashiers", "Updated Cashier", `Updated ${fullName} (${username}, ${status})`);
+                } else {
+                    if (demoList.some(u => u.username.toLowerCase() === username)) {
+                        showCashierMessage("Username already exists.", true);
+                        return;
+                    }
+                    const nextId = demoList.reduce((m, u) => Math.max(m, Number(u.user_id || 0)), 0) + 1;
+                    demoList.push({
+                        user_id: nextId,
+                        username,
+                        password,
+                        full_name: fullName,
+                        email,
+                        role: "cashier",
+                        status
+                    });
+                    recordLocalActivity("Cashiers", "Created Cashier", `Created cashier account ${username} (${fullName})`);
+                }
+                if (branding) branding.saveDemoUsers(demoList);
+                cashierUsers = demoList;
+                panel.hidden = true;
+                form.reset();
+                renderCashiers();
+                showCashierMessage("Cashier account saved in preview mode.");
+                return;
+            }
+
+            if (!response.ok) {
+                throw new Error(result.message || "Unable to save cashier account.");
+            }
+
+            panel.hidden = true;
+            form.reset();
+            await loadUsersForManagement();
+            showCashierMessage(result.message || "Cashier account saved.");
+        } catch (error) {
+            showCashierMessage(error.message || "Unable to save cashier account.", true);
+        }
+    });
+
+    if (tbody) {
+        tbody.addEventListener("click", async function (event) {
+            const btn = event.target.closest("button[data-cashier-action]");
+            if (!btn) return;
+            const action = btn.dataset.cashierAction;
+            const userId = Number(btn.dataset.id);
+            const user = cashierUsers.find(u => Number(u.user_id) === userId);
+            if (!user) return;
+
+            const branding = window.EPharmaBranding;
+
+            if (action === "edit") {
+                openCashierForm(user);
+                return;
+            }
+
+            if (action === "toggle") {
+                const nextStatus = user.status === "Active" ? "Inactive" : "Active";
+                try {
+                    const response = await fetch(`/api/users/${userId}`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            full_name: user.full_name,
+                            email: user.email,
+                            status: nextStatus
+                        })
+                    });
+                    const result = await response.json().catch(() => ({}));
+                    if (isServerDbUnavailable(response, result)) {
+                        const demoList = branding ? branding.getDemoUsers() : cashierUsers;
+                        const target = demoList.find(u => Number(u.user_id) === userId);
+                        if (target) target.status = nextStatus;
+                        if (branding) branding.saveDemoUsers(demoList);
+                        cashierUsers = demoList;
+                        recordLocalActivity("Cashiers", `${nextStatus === "Active" ? "Activated" : "Deactivated"} Cashier`, `${user.username} is now ${nextStatus}`);
+                        renderCashiers();
+                        showCashierMessage(`${user.username} is now ${nextStatus}.`);
+                        return;
+                    }
+                    if (!response.ok) throw new Error(result.message || "Unable to update status.");
+                    await loadUsersForManagement();
+                    showCashierMessage(`${user.username} is now ${nextStatus}.`);
+                } catch (err) {
+                    showCashierMessage(err.message || "Status update failed.", true);
+                }
+                return;
+            }
+
+            if (action === "delete") {
+                if (!confirm(`Delete cashier account "${user.username}" (${user.full_name})?`)) return;
+                try {
+                    const response = await fetch(`/api/users/${userId}`, { method: "DELETE" });
+                    const result = await response.json().catch(() => ({}));
+                    if (isServerDbUnavailable(response, result)) {
+                        let demoList = branding ? branding.getDemoUsers() : cashierUsers;
+                        demoList = demoList.filter(u => Number(u.user_id) !== userId);
+                        if (branding) branding.saveDemoUsers(demoList);
+                        cashierUsers = demoList;
+                        recordLocalActivity("Cashiers", "Deleted Cashier", `Removed ${user.username} (${user.full_name})`);
+                        renderCashiers();
+                        showCashierMessage(`Deleted ${user.username} (preview mode).`);
+                        return;
+                    }
+                    if (!response.ok) throw new Error(result.message || "Unable to delete cashier.");
+                    await loadUsersForManagement();
+                    showCashierMessage(result.message || "Cashier deleted.");
+                } catch (err) {
+                    showCashierMessage(err.message || "Delete failed.", true);
+                }
+            }
+        });
+    }
+
+    await loadUsersForManagement();
+}
+
+/* =========================================
+   ADMIN: ACTIVITY LOGS PAGE
+========================================= */
+
+function renderActivityLogs() {
+    const tbody = document.getElementById("activityLogsBody");
+    if (!tbody) return;
+
+    const search = (document.getElementById("logsSearch")?.value || "").trim().toLowerCase();
+    const roleFilter = document.getElementById("logsRoleFilter")?.value || "all";
+    const moduleFilter = document.getElementById("logsModuleFilter")?.value || "all";
+
+    const totalEl = document.getElementById("logTotalCount");
+    const adminEl = document.getElementById("logAdminCount");
+    const cashierEl = document.getElementById("logCashierCount");
+
+    if (totalEl) totalEl.textContent = String(activityLogs.length);
+    if (adminEl) adminEl.textContent = String(activityLogs.filter(l => l.role === "admin").length);
+    if (cashierEl) cashierEl.textContent = String(activityLogs.filter(l => l.role === "cashier").length);
+
+    const filtered = activityLogs.filter(log => {
+        if (roleFilter !== "all" && log.role !== roleFilter) return false;
+        if (moduleFilter !== "all" && log.module !== moduleFilter) return false;
+        if (search) {
+            const hay = `${log.username} ${log.actor_name} ${log.module} ${log.action} ${log.details}`.toLowerCase();
+            if (!hay.includes(search)) return false;
+        }
+        return true;
+    });
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="inventory-empty">No activity log entries found.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(log => {
+        const dt = new Date(log.created_at).toLocaleString("en-PH");
+        return `
+            <tr>
+                <td>${escapeSupplierText(dt)}</td>
+                <td><strong>${escapeSupplierText(log.actor_name || log.username)}</strong><small>${escapeSupplierText(log.username)}</small></td>
+                <td><span class="badge ${log.role === "admin" ? "role-admin" : "role-cashier"}">${escapeSupplierText(log.role)}</span></td>
+                <td>${escapeSupplierText(log.module)}</td>
+                <td><strong>${escapeSupplierText(log.action)}</strong></td>
+                <td>${escapeSupplierText(log.details || "-")}</td>
+            </tr>
+        `;
+    }).join("");
+}
+
+async function initializeActivityLogsPage() {
+    if (isCashierRole()) return;
+
+    const searchInput = document.getElementById("logsSearch");
+    const roleFilter = document.getElementById("logsRoleFilter");
+    const moduleFilter = document.getElementById("logsModuleFilter");
+
+    if (searchInput && searchInput.dataset.initialized !== "true") {
+        searchInput.dataset.initialized = "true";
+        searchInput.addEventListener("input", renderActivityLogs);
+    }
+    if (roleFilter && roleFilter.dataset.initialized !== "true") {
+        roleFilter.dataset.initialized = "true";
+        roleFilter.addEventListener("change", renderActivityLogs);
+    }
+    if (moduleFilter && moduleFilter.dataset.initialized !== "true") {
+        moduleFilter.dataset.initialized = "true";
+        moduleFilter.addEventListener("change", renderActivityLogs);
+    }
+
+    try {
+        const response = await fetch("/api/activity-logs?limit=150");
+        const rows = await response.json().catch(() => ({}));
+        if (!isServerDbUnavailable(response, rows) && response.ok && Array.isArray(rows)) {
+            activityLogs = rows;
+        }
+    } catch {
+        // Keep local preview activityLogs.
+    }
+
+    renderActivityLogs();
+}
+
+/* =========================================
+   SHARED: MY ACCOUNT PAGE (ADMIN & CASHIER)
+========================================= */
+
+function initializeAccountPage() {
+    const profileForm = document.getElementById("accountProfileForm");
+    const passwordForm = document.getElementById("accountPasswordForm");
+    if (!profileForm || !passwordForm) return;
+
+    const session = getCurrentSession();
+    const branding = window.EPharmaBranding;
+    const usernameInput = document.getElementById("accountUsername");
+    const fullNameInput = document.getElementById("accountFullName");
+    const emailInput = document.getElementById("accountEmail");
+    const roleBadge = document.getElementById("accountRoleBadge");
+    const profileMsg = document.getElementById("accountProfileMessage");
+    const passwordMsg = document.getElementById("accountPasswordMessage");
+
+    if (usernameInput) usernameInput.value = session.username || "";
+    if (fullNameInput) fullNameInput.value = session.fullName || getCurrentDisplayName();
+    if (emailInput) emailInput.value = session.email || "";
+    if (roleBadge) {
+        const isCashier = session.role === "cashier";
+        roleBadge.textContent = isCashier ? "Cashier" : "Admin";
+        roleBadge.className = "role-badge " + (isCashier ? "role-badge--cashier" : "role-badge--admin");
+    }
+
+    function setMsg(el, text, isError) {
+        if (!el) return;
+        el.textContent = text;
+        el.style.color = isError ? "#B91C1C" : "#067D70";
+    }
+
+    profileForm.onsubmit = async function (event) {
+        event.preventDefault();
+        const fullName = fullNameInput ? fullNameInput.value.trim() : "";
+        const email = emailInput ? emailInput.value.trim() : "";
+        if (!fullName) {
+            setMsg(profileMsg, "Full name is required.", true);
+            return;
+        }
+
+        try {
+            const response = await fetch("/api/account/profile", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    username: session.username,
+                    full_name: fullName,
+                    email
+                })
+            });
+            const result = await response.json().catch(() => ({}));
+
+            if (isServerDbUnavailable(response, result)) {
+                isDemoDatabaseMode = true;
+                if (branding) {
+                    const demoUsers = branding.getDemoUsers();
+                    const user = demoUsers.find(u => u.username.toLowerCase() === String(session.username).toLowerCase());
+                    if (user) {
+                        user.full_name = fullName;
+                        user.email = email;
+                        branding.saveDemoUsers(demoUsers);
+                    }
+                    branding.setActiveSession({
+                        ...session,
+                        fullName,
+                        email
+                    });
+                    branding.applyBranding();
+                }
+                recordLocalActivity("Account", "Updated Profile", `Updated profile name to ${fullName}`);
+                setMsg(profileMsg, "Profile updated in preview mode.", false);
+                return;
+            }
+
+            if (!response.ok) {
+                throw new Error(result.message || "Unable to update profile.");
+            }
+
+            if (branding && result.user) {
+                branding.setActiveSession({
+                    ...session,
+                    fullName: result.user.full_name,
+                    email: result.user.email || ""
+                });
+                branding.applyBranding();
+            }
+            setMsg(profileMsg, result.message || "Profile updated successfully.", false);
+        } catch (err) {
+            setMsg(profileMsg, err.message || "Profile update failed.", true);
+        }
+    };
+
+    passwordForm.onsubmit = async function (event) {
+        event.preventDefault();
+        const currentPassword = document.getElementById("accountCurrentPassword")?.value || "";
+        const newPassword = document.getElementById("accountNewPassword")?.value || "";
+        const confirmPassword = document.getElementById("accountConfirmPassword")?.value || "";
+
+        if (!currentPassword || !newPassword) {
+            setMsg(passwordMsg, "Please fill out all password fields.", true);
+            return;
+        }
+        if (newPassword.length < 6) {
+            setMsg(passwordMsg, "New password must be at least 6 characters.", true);
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            setMsg(passwordMsg, "New passwords do not match.", true);
+            return;
+        }
+
+        try {
+            const response = await fetch("/api/account/password", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    username: session.username,
+                    current_password: currentPassword,
+                    new_password: newPassword
+                })
+            });
+            const result = await response.json().catch(() => ({}));
+
+            if (isServerDbUnavailable(response, result)) {
+                isDemoDatabaseMode = true;
+                if (branding) {
+                    const demoUsers = branding.getDemoUsers();
+                    const user = demoUsers.find(u => u.username.toLowerCase() === String(session.username).toLowerCase());
+                    if (!user || user.password !== currentPassword) {
+                        setMsg(passwordMsg, "Current password is incorrect.", true);
+                        return;
+                    }
+                    user.password = newPassword;
+                    branding.saveDemoUsers(demoUsers);
+                }
+                passwordForm.reset();
+                recordLocalActivity("Account", "Changed Password", `Password updated for ${session.username}`);
+                setMsg(passwordMsg, "Password updated in preview mode.", false);
+                return;
+            }
+
+            if (!response.ok) {
+                throw new Error(result.message || "Unable to change password.");
+            }
+
+            passwordForm.reset();
+            setMsg(passwordMsg, result.message || "Password changed successfully.", false);
+        } catch (err) {
+            setMsg(passwordMsg, err.message || "Password update failed.", true);
+        }
+    };
 }
 
 let notificationReadState = {};
@@ -3617,64 +4950,110 @@ initializeNotifications();
 
 
 function refreshDashboardStats() {
+    applyDashboardRoleView();
+
+    const cashierMode = isCashierRole();
+    const myUsername = getCurrentUsername().toLowerCase();
     const totalMedicinesElement = document.getElementById("totalMedicines");
     const lowStockElement = document.getElementById("lowStock");
     const totalSalesElement = document.getElementById("totalSales");
     const expiringSoonElement = document.getElementById("expiringSoon");
 
     if (typeof inventoryMedicines !== "undefined") {
-        const totalMedicines = inventoryMedicines.length;
+        const availableCount = cashierMode
+            ? inventoryMedicines.filter(m => Number(m.quantity) > 0).length
+            : inventoryMedicines.length;
 
         const lowStockMedicines = inventoryMedicines.filter(medicine =>
             Number(medicine.quantity) <= Number(medicine.reorderLevel)
         );
 
         if (totalMedicinesElement) {
-            totalMedicinesElement.textContent = totalMedicines;
+            totalMedicinesElement.textContent = String(availableCount);
         }
 
         if (lowStockElement) {
-            lowStockElement.textContent = lowStockMedicines.length;
+            lowStockElement.textContent = String(lowStockMedicines.length);
         }
 
         const lowStockBody = document.querySelector("#lowStockTable tbody");
-        if (lowStockBody && lowStockMedicines.length > 0) {
-            lowStockBody.innerHTML = lowStockMedicines.slice(0, 5).map(med => `
-                <tr>
-                    <td>
-                        <strong>${escapeSupplierText(med.name)}</strong>
-                        <small>${escapeSupplierText(med.category || "Medicine")}</small>
-                    </td>
-                    <td>${med.quantity}</td>
-                    <td>
-                        <span class="badge ${med.quantity === 0 ? "danger" : "warning"}">
-                            ${med.quantity === 0 ? "Out" : "Low"}
-                        </span>
-                    </td>
-                </tr>
-            `).join("");
+        if (lowStockBody) {
+            if (lowStockMedicines.length === 0) {
+                lowStockBody.innerHTML = '<tr><td colspan="3" class="inventory-empty">All medicines are adequately stocked.</td></tr>';
+            } else {
+                lowStockBody.innerHTML = lowStockMedicines.slice(0, 5).map(med => `
+                    <tr>
+                        <td>
+                            <strong>${escapeSupplierText(med.name)}</strong>
+                            <small>${escapeSupplierText(med.category || "Medicine")}</small>
+                        </td>
+                        <td>${med.quantity}</td>
+                        <td>
+                            <span class="badge ${med.quantity === 0 ? "danger" : "warning"}">
+                                ${med.quantity === 0 ? "Out" : "Low"}
+                            </span>
+                        </td>
+                    </tr>
+                `).join("");
+            }
         }
     }
 
-    if (typeof salesRecords !== "undefined" && salesRecords.length > 0) {
-        const salesTotalSum = salesRecords.reduce((sum, s) => sum + Number(s.total || 0), 0);
+    if (typeof salesRecords !== "undefined") {
+        const now = new Date();
+        const visibleSales = cashierMode
+            ? salesRecords.filter(s => (s.cashierUsername || "").toLowerCase() === myUsername)
+            : salesRecords;
+
         if (totalSalesElement) {
-            totalSalesElement.textContent = "₱" + salesTotalSum.toLocaleString("en-PH", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
-            });
+            if (cashierMode) {
+                const myTodayCount = visibleSales.filter(s => {
+                    const d = new Date(s.timestamp);
+                    return d.getFullYear() === now.getFullYear() &&
+                        d.getMonth() === now.getMonth() &&
+                        d.getDate() === now.getDate();
+                }).length;
+                totalSalesElement.textContent = String(myTodayCount);
+
+                const shiftNote = document.getElementById("cashierShiftSummaryNote");
+                if (shiftNote) {
+                    shiftNote.textContent = `You have completed ${myTodayCount} transaction${myTodayCount === 1 ? "" : "s"} today (${visibleSales.length} total on record).`;
+                }
+            } else {
+                const salesTotalSum = salesRecords.reduce((sum, s) => sum + Number(s.total || 0), 0);
+                totalSalesElement.textContent = "₱" + salesTotalSum.toLocaleString("en-PH", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2
+                });
+            }
         }
+
         const recentSalesBody = document.querySelector("#recentSalesTable tbody");
         if (recentSalesBody) {
-            recentSalesBody.innerHTML = salesRecords.slice(0, 5).map(sale => `
-                <tr>
-                    <td>${escapeSupplierText(sale.receipt)}</td>
-                    <td>${escapeSupplierText(sale.date)}</td>
-                    <td>${sale.quantity} item${sale.quantity === 1 ? "" : "s"} (${escapeSupplierText(sale.medicineName)})</td>
-                    <td>₱${Number(sale.total).toFixed(2)}</td>
-                    <td><span class="badge success">Completed</span></td>
-                </tr>
-            `).join("");
+            if (visibleSales.length === 0) {
+                recentSalesBody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="inventory-empty">
+                            ${cashierMode ? "No transactions recorded by your account yet." : "No recent sales recorded yet."}
+                        </td>
+                    </tr>
+                `;
+            } else {
+                recentSalesBody.innerHTML = visibleSales.slice(0, 5).map(sale => `
+                    <tr>
+                        <td>${escapeSupplierText(sale.receipt)}</td>
+                        <td>${escapeSupplierText(sale.date)}</td>
+                        <td>${escapeSupplierText(sale.cashierName || sale.cashierUsername || "Staff")}</td>
+                        <td>${sale.quantity} item${sale.quantity === 1 ? "" : "s"} (${escapeSupplierText(sale.medicineName)})</td>
+                        <td>₱${Number(sale.total).toFixed(2)}</td>
+                        <td><span class="badge success">Completed</span></td>
+                    </tr>
+                `).join("");
+            }
+        }
+
+        if (!cashierMode) {
+            renderSalesOverviewChart();
         }
     }
 
@@ -3683,7 +5062,7 @@ function refreshDashboardStats() {
             const st = getExpirationStatus(med.expiry).status;
             return st === "Expired" || st === "Expiring Soon";
         }).length;
-        expiringSoonElement.textContent = expAlerts;
+        expiringSoonElement.textContent = String(expAlerts);
     }
 
     renderNotifications();
@@ -3745,11 +5124,15 @@ async function loadMedicinesFromDatabase() {
 
 async function loadSalesRecordsFromDatabase() {
     try {
-        const response = await fetch("/api/sales");
+        const query = isCashierRole()
+            ? `/api/sales?cashier_username=${encodeURIComponent(getCurrentUsername())}`
+            : "/api/sales";
+        const response = await fetch(query);
         const rows = await response.json().catch(() => ({}));
 
         if (isServerDbUnavailable(response, rows)) {
             isDemoDatabaseMode = true;
+            populateSalesCashierFilter();
             renderSalesRecords();
             if (typeof refreshDashboardStats === "function") {
                 refreshDashboardStats();
@@ -3768,6 +5151,7 @@ async function loadSalesRecordsFromDatabase() {
                     String(row.sale_id).padStart(4, "0"),
                 date: new Date(row.sale_date).toLocaleString("en-PH"),
                 timestamp: new Date(row.sale_date).getTime(),
+                cashierUsername: row.cashier_username || "",
                 cashierName: row.cashier_name || "Admin",
                 medicineName: row.medicine_name,
                 quantity: Number(row.quantity),
@@ -3786,12 +5170,14 @@ async function loadSalesRecordsFromDatabase() {
             1
         );
 
+        populateSalesCashierFilter();
         renderSalesRecords();
         if (typeof refreshDashboardStats === "function") {
             refreshDashboardStats();
         }
     } catch (error) {
         console.error("Load sales error:", error);
+        populateSalesCashierFilter();
         renderSalesRecords();
     }
 }
@@ -3886,6 +5272,7 @@ function initializePurchaseReceiveButton() {
                     if (med) {
                         med.quantity += record.quantity;
                     }
+                    recordLocalActivity("Purchase", "Received Purchase", `${record.purchaseNo}: +${record.quantity} ${record.medicineName}`);
                 }
                 renderPurchaseRecords();
                 refreshDashboardStats();
@@ -3929,14 +5316,15 @@ function initializePurchaseReceiveButton() {
     applyRoleAccessControl();
 
     const hashPage = (window.location.hash || "").replace(/^#/, "").trim();
-    const defaultPage = isCashierRole() ? "sales" : "dashboard";
     const startPage = hashPage && canAccessPage(hashPage)
         ? hashPage
-        : defaultPage;
+        : "dashboard";
 
     if (startPage !== "dashboard") {
         showPage(startPage);
     } else {
+        initializeDashboard();
+        refreshDashboardStats();
         loadMedicinesFromDatabase();
         loadSalesRecordsFromDatabase();
     }

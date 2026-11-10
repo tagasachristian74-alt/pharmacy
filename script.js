@@ -19,20 +19,35 @@ const demoRoleHint = document.getElementById("demoRoleHint");
 const fillAdminDemo = document.getElementById("fillAdminDemo");
 const fillCashierDemo = document.getElementById("fillCashierDemo");
 
-const ACCOUNTS = {
-    admin: {
+const FALLBACK_ACCOUNTS = [
+    {
+        user_id: 1,
         username: "admin",
         password: "Admin123!",
+        fullName: "Administrator",
+        email: "admin@example.com",
         role: "admin",
-        label: "Admin"
+        status: "Active"
     },
-    cashier: {
+    {
+        user_id: 2,
         username: "cashier",
         password: "Cashier123!",
+        fullName: "Cashier 1 (Alex Reyes)",
+        email: "cashier@example.com",
         role: "cashier",
-        label: "Cashier"
+        status: "Active"
+    },
+    {
+        user_id: 3,
+        username: "cashier2",
+        password: "Cashier123!",
+        fullName: "Cashier 2 (Maria Santos)",
+        email: "maria@example.com",
+        role: "cashier",
+        status: "Active"
     }
-};
+];
 
 let selectedRole = "admin";
 
@@ -57,12 +72,12 @@ function selectRole(role) {
     }
     if (loginBtnLabel) {
         loginBtnLabel.textContent = selectedRole === "cashier"
-            ? "Login to Cashier POS"
+            ? "Login as Cashier"
             : "Login as Admin";
     }
     if (demoRoleHint) {
         demoRoleHint.textContent = selectedRole === "cashier"
-            ? "Cashier: cashier / Cashier123!"
+            ? "Cashier: cashier / Cashier123! (or cashier2)"
             : "Admin: admin / Admin123!";
     }
 }
@@ -84,8 +99,8 @@ if (roleTabCashier) {
 if (fillAdminDemo) {
     fillAdminDemo.addEventListener("click", function () {
         selectRole("admin");
-        usernameInput.value = ACCOUNTS.admin.username;
-        passwordInput.value = ACCOUNTS.admin.password;
+        usernameInput.value = "admin";
+        passwordInput.value = "Admin123!";
         clearMessage();
         usernameInput.focus();
     });
@@ -94,8 +109,8 @@ if (fillAdminDemo) {
 if (fillCashierDemo) {
     fillCashierDemo.addEventListener("click", function () {
         selectRole("cashier");
-        usernameInput.value = ACCOUNTS.cashier.username;
-        passwordInput.value = ACCOUNTS.cashier.password;
+        usernameInput.value = "cashier";
+        passwordInput.value = "Cashier123!";
         clearMessage();
         usernameInput.focus();
     });
@@ -132,11 +147,76 @@ function clearMessage() {
     message.className = "message";
 }
 
+function getLocalAccounts() {
+    if (window.EPharmaBranding && typeof window.EPharmaBranding.getDemoUsers === "function") {
+        return window.EPharmaBranding.getDemoUsers();
+    }
+    return FALLBACK_ACCOUNTS;
+}
+
+function completeLogin(user) {
+    selectRole(user.role);
+
+    if (window.EPharmaBranding && typeof window.EPharmaBranding.setActiveSession === "function") {
+        window.EPharmaBranding.setActiveSession({
+            user_id: user.user_id,
+            username: user.username,
+            fullName: user.fullName || user.full_name || user.username,
+            email: user.email || "",
+            role: user.role
+        });
+    } else {
+        try {
+            const payload = JSON.stringify({
+                user_id: user.user_id,
+                username: user.username,
+                fullName: user.fullName || user.username,
+                email: user.email || "",
+                role: user.role
+            });
+            sessionStorage.setItem("epharmaSession", payload);
+            localStorage.setItem("epharmaSession", payload);
+        } catch {
+            // Ignore storage errors.
+        }
+    }
+
+    try {
+        const rawLogs = localStorage.getItem("epharmaDemoLogs");
+        const logs = rawLogs ? JSON.parse(rawLogs) : [];
+        if (Array.isArray(logs)) {
+            const nextId = logs.reduce((m, item) => Math.max(m, Number(item.log_id || 0)), 0) + 1;
+            logs.unshift({
+                log_id: nextId,
+                username: user.username,
+                actor_name: user.fullName || user.full_name || user.username,
+                role: user.role === "cashier" ? "cashier" : "admin",
+                module: "Auth",
+                action: "Logged In",
+                details: `${user.role === "cashier" ? "Cashier" : "Admin"} session started`,
+                created_at: new Date().toISOString()
+            });
+            localStorage.setItem("epharmaDemoLogs", JSON.stringify(logs.slice(0, 200)));
+        }
+    } catch {
+        // Ignore storage errors.
+    }
+
+    showMessage(
+        user.role === "cashier"
+            ? "Login successful! Opening Cashier Workspace..."
+            : "Login successful! Opening Admin Dashboard...",
+        "success"
+    );
+
+    window.location.href = "dashboard.html";
+}
+
 // ========================================
-// LOGIN VALIDATION (ADMIN & CASHIER)
+// LOGIN VALIDATION (MYSQL + PREVIEW FALLBACK)
 // ========================================
 
-loginForm.addEventListener("submit", function (event) {
+loginForm.addEventListener("submit", async function (event) {
     event.preventDefault();
 
     const username = usernameInput.value.trim();
@@ -150,46 +230,62 @@ loginForm.addEventListener("submit", function (event) {
         return;
     }
 
-    const matchedAccount = Object.values(ACCOUNTS).find(
-        account => account.username === username && account.password === password
-    );
+    const submitBtn = document.getElementById("loginSubmitBtn");
+    if (submitBtn) submitBtn.disabled = true;
 
-    if (matchedAccount) {
-        selectRole(matchedAccount.role);
+    try {
+        const response = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password })
+        });
 
-        if (window.EPharmaBranding && typeof window.EPharmaBranding.setActiveSession === "function") {
-            window.EPharmaBranding.setActiveSession({
-                role: matchedAccount.role,
-                username: matchedAccount.username
-            });
-        } else {
-            try {
-                const sessionPayload = JSON.stringify({
-                    role: matchedAccount.role,
-                    username: matchedAccount.username
-                });
-                sessionStorage.setItem("epharmaSession", sessionPayload);
-                localStorage.setItem("epharmaSession", sessionPayload);
-            } catch {
-                // Ignore storage errors.
-            }
+        const payload = await response.json().catch(() => ({}));
+
+        if (response.status === 503 || payload.dbUnavailable) {
+            throw new Error("DB_UNAVAILABLE");
         }
 
-        showMessage(
-            matchedAccount.role === "cashier"
-                ? "Login successful! Opening Cashier POS..."
-                : "Login successful! Opening Admin Dashboard...",
-            "success"
+        if (!response.ok) {
+            showMessage(
+                payload.message || "Invalid username or password.",
+                "error"
+            );
+            return;
+        }
+
+        if (payload && payload.user) {
+            completeLogin(payload.user);
+            return;
+        }
+    } catch (error) {
+        if (error && error.message !== "DB_UNAVAILABLE" && error.name !== "TypeError") {
+            console.warn("Auth fallback:", error.message);
+        }
+
+        const matched = getLocalAccounts().find(
+            acc => String(acc.username || "").toLowerCase() === username.toLowerCase() && acc.password === password
         );
 
-        window.location.href = matchedAccount.role === "cashier"
-            ? "dashboard.html#sales"
-            : "dashboard.html";
-    } else {
-        showMessage(
-            "Invalid username or password. Use Admin (admin / Admin123!) or Cashier (cashier / Cashier123!).",
-            "error"
-        );
+        if (!matched) {
+            showMessage(
+                "Invalid username or password. Use Admin (admin / Admin123!) or Cashier (cashier / Cashier123!).",
+                "error"
+            );
+            return;
+        }
+
+        if (matched.status === "Inactive") {
+            showMessage(
+                "This account is currently inactive. Contact the administrator.",
+                "error"
+            );
+            return;
+        }
+
+        completeLogin(matched);
+    } finally {
+        if (submitBtn) submitBtn.disabled = false;
     }
 });
 

@@ -2,6 +2,7 @@
 const express = require("express");
 const mysql = require("mysql2/promise");
 const cors = require("cors");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
@@ -14,6 +15,25 @@ app.use(express.json({ limit: "10mb" }));
 
 // Serve E-Pharma frontend files
 app.use(express.static(__dirname));
+
+function hashPassword(plainText) {
+    const salt = crypto.randomBytes(16).toString("hex");
+    const derived = crypto.scryptSync(String(plainText), salt, 64).toString("hex");
+    return `${salt}:${derived}`;
+}
+
+function verifyPassword(plainText, storedHash) {
+    const raw = String(storedHash || "");
+    if (!raw.includes(":")) {
+        return raw === String(plainText);
+    }
+    const [salt, keyHex] = raw.split(":");
+    if (!salt || !keyHex) return false;
+    const expected = Buffer.from(keyHex, "hex");
+    const actual = crypto.scryptSync(String(plainText), salt, 64);
+    if (expected.length !== actual.length) return false;
+    return crypto.timingSafeEqual(expected, actual);
+}
 
 // MySQL connection pool
 const db = mysql.createPool({
@@ -68,8 +88,13 @@ async function ensureSchemaUpgrades() {
         },
         {
             table: "sales",
+            column: "cashier_username",
+            sql: "ALTER TABLE sales ADD COLUMN cashier_username VARCHAR(80) DEFAULT 'admin' AFTER total_amount"
+        },
+        {
+            table: "sales",
             column: "cashier_name",
-            sql: "ALTER TABLE sales ADD COLUMN cashier_name VARCHAR(120) DEFAULT 'Admin' AFTER total_amount"
+            sql: "ALTER TABLE sales ADD COLUMN cashier_name VARCHAR(120) DEFAULT 'Admin' AFTER cashier_username"
         },
         {
             table: "sale_items",
@@ -95,7 +120,67 @@ async function ensureSchemaUpgrades() {
         }
     }
 
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(80) NOT NULL UNIQUE,
+            password_hash VARCHAR(255) NOT NULL,
+            full_name VARCHAR(120) NOT NULL,
+            email VARCHAR(150) DEFAULT '',
+            role ENUM('admin', 'cashier') NOT NULL DEFAULT 'cashier',
+            status ENUM('Active', 'Inactive') NOT NULL DEFAULT 'Active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        )
+    `);
+
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS activity_logs (
+            log_id INT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(80) NOT NULL,
+            actor_name VARCHAR(120) NOT NULL,
+            role ENUM('admin', 'cashier') NOT NULL DEFAULT 'admin',
+            module VARCHAR(60) NOT NULL,
+            action VARCHAR(100) NOT NULL,
+            details VARCHAR(500) DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    const [countRows] = await db.query("SELECT COUNT(*) AS cnt FROM users");
+    if (Number(countRows[0]?.cnt || 0) === 0) {
+        await db.query(
+            `INSERT INTO users (username, password_hash, full_name, email, role, status)
+             VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
+            [
+                "admin", hashPassword("Admin123!"), "Administrator", "admin@example.com", "admin", "Active",
+                "cashier", hashPassword("Cashier123!"), "Cashier 1 (Alex Reyes)", "cashier@example.com", "cashier", "Active",
+                "cashier2", hashPassword("Cashier123!"), "Cashier 2 (Maria Santos)", "maria@example.com", "cashier", "Active"
+            ]
+        );
+    }
+
     schemaUpgraded = true;
+}
+
+async function recordActivityLog({ username, actor_name, role, module, action, details = "" }) {
+    try {
+        await ensureSchemaUpgrades();
+        await db.query(
+            `INSERT INTO activity_logs (username, actor_name, role, module, action, details)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [
+                String(username || "admin").trim().slice(0, 80) || "admin",
+                String(actor_name || "Admin").trim().slice(0, 120) || "Admin",
+                role === "cashier" ? "cashier" : "admin",
+                String(module || "System").trim().slice(0, 60),
+                String(action || "Updated").trim().slice(0, 100),
+                String(details || "").trim().slice(0, 500)
+            ]
+        );
+    } catch {
+        // Never fail primary API request if audit logging fails.
+    }
 }
 
 // Test server
@@ -197,6 +282,15 @@ app.post("/api/medicines", async (req, res) => {
             ]
         );
 
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Administrator",
+            role: "admin",
+            module: "Inventory",
+            action: "Added Medicine",
+            details: `${medicine_name.trim()} (₱${Number(price).toFixed(2)}, ${Number(discount.toFixed(2))}% off, Qty: ${Number(quantity)})`
+        });
+
         res.status(201).json({
             message: "Medicine added successfully.",
             medicine_id: result.insertId
@@ -270,6 +364,15 @@ app.put("/api/medicines/:id", async (req, res) => {
             });
         }
 
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Administrator",
+            role: "admin",
+            module: "Inventory",
+            action: "Updated Medicine",
+            details: `${medicine_name.trim()} (₱${Number(price).toFixed(2)}, ${Number(discount.toFixed(2))}% off, Qty: ${Number(quantity)})`
+        });
+
         res.json({ message: "Medicine updated successfully." });
     } catch (error) {
         console.error("Update medicine error:", error.message);
@@ -291,6 +394,15 @@ app.delete("/api/medicines/:id", async (req, res) => {
             });
         }
 
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Administrator",
+            role: "admin",
+            module: "Inventory",
+            action: "Deleted Medicine",
+            details: `Removed medicine ID #${req.params.id}`
+        });
+
         res.json({ message: "Medicine deleted successfully." });
     } catch (error) {
         console.error("Delete medicine error:", error.message);
@@ -305,14 +417,23 @@ app.delete("/api/medicines/:id", async (req, res) => {
 
 /* ===== SALES API ===== */
 
-// Get sales history
+// Get sales history (optionally filtered by cashier_username)
 app.get("/api/sales", async (req, res) => {
     try {
         await ensureSchemaUpgrades();
+        const cashierUsername = String(req.query.cashier_username || "").trim();
+        const params = [];
+        let whereClause = "";
+        if (cashierUsername) {
+            whereClause = "WHERE s.cashier_username = ?";
+            params.push(cashierUsername);
+        }
+
         const [rows] = await db.query(`
             SELECT
                 s.sale_id,
                 s.total_amount,
+                s.cashier_username,
                 s.cashier_name,
                 s.sale_date,
                 si.medicine_id,
@@ -325,8 +446,9 @@ app.get("/api/sales", async (req, res) => {
             FROM sales s
             JOIN sale_items si ON si.sale_id = s.sale_id
             JOIN medicines m ON m.medicine_id = si.medicine_id
+            ${whereClause}
             ORDER BY s.sale_id DESC
-        `);
+        `, params);
 
         res.json(rows);
     } catch (error) {
@@ -340,7 +462,14 @@ app.post("/api/sales", async (req, res) => {
     let connection;
 
     try {
-        const { medicine_id, quantity, discount_percent, cashier_name } = req.body;
+        const {
+            medicine_id,
+            quantity,
+            discount_percent,
+            cashier_name,
+            cashier_username,
+            actor_role
+        } = req.body;
         const medicineId = Number(medicine_id);
         const qty = Number(quantity);
 
@@ -405,11 +534,12 @@ app.post("/api/sales", async (req, res) => {
         discountPercent = Number(discountPercent.toFixed(2));
         const unitPrice = Number((originalPrice * (1 - discountPercent / 100)).toFixed(2));
         const subtotal = Number((unitPrice * qty).toFixed(2));
+        const cashierUser = String(cashier_username || "admin").trim().slice(0, 80) || "admin";
         const cashierLabel = String(cashier_name || "Admin").trim().slice(0, 120) || "Admin";
 
         const [saleResult] = await connection.query(
-            "INSERT INTO sales (total_amount, cashier_name) VALUES (?, ?)",
-            [subtotal, cashierLabel]
+            "INSERT INTO sales (total_amount, cashier_username, cashier_name) VALUES (?, ?, ?)",
+            [subtotal, cashierUser, cashierLabel]
         );
 
         await connection.query(
@@ -428,6 +558,15 @@ app.post("/api/sales", async (req, res) => {
 
         await connection.commit();
 
+        await recordActivityLog({
+            username: cashierUser,
+            actor_name: cashierLabel,
+            role: actor_role === "admin" ? "admin" : "cashier",
+            module: "Sales",
+            action: "Completed Sale",
+            details: `Receipt EP-${String(saleResult.insertId).padStart(4, "0")}: ${medicine.medicine_name} x${qty} (₱${subtotal.toFixed(2)})`
+        });
+
         res.status(201).json({
             message: "Sale completed successfully.",
             sale_id: saleResult.insertId,
@@ -435,6 +574,7 @@ app.post("/api/sales", async (req, res) => {
             unit_price: unitPrice,
             discount_percent: discountPercent,
             total_amount: subtotal,
+            cashier_username: cashierUser,
             cashier_name: cashierLabel
         });
     } catch (error) {
@@ -489,8 +629,6 @@ app.post("/api/purchases", async (req, res) => {
     let connection;
 
     try {
-        connection = await db.getConnection();
-
         const {
             medicine_id,
             supplier_name,
@@ -513,6 +651,8 @@ app.post("/api/purchases", async (req, res) => {
                 message: "Enter valid purchase details."
             });
         }
+
+        connection = await db.getConnection();
 
         await connection.beginTransaction();
 
@@ -562,6 +702,15 @@ app.post("/api/purchases", async (req, res) => {
         );
 
         await connection.commit();
+
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Admin",
+            role: "admin",
+            module: "Purchase",
+            action: "Created Purchase",
+            details: `PUR-${String(purchaseResult.insertId).padStart(4, "0")}: medicine #${medicineId} x${qty} from ${supplierName}`
+        });
 
         res.status(201).json({
             message: "Purchase saved as Pending.",
@@ -626,6 +775,15 @@ app.patch("/api/purchases/:id/receive", async (req, res) => {
 
         await connection.commit();
 
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Admin",
+            role: "admin",
+            module: "Purchase",
+            action: "Received Purchase",
+            details: `Marked PUR-${String(req.params.id).padStart(4, "0")} Received and added stock`
+        });
+
         res.json({
             message: "Purchase received and stock updated."
         });
@@ -688,6 +846,15 @@ app.post("/api/suppliers", async (req, res) => {
             ]
         );
 
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Admin",
+            role: "admin",
+            module: "Suppliers",
+            action: "Added Supplier",
+            details: `Added supplier ${supplier_name.trim()}`
+        });
+
         res.status(201).json({
             success: true,
             message: "Supplier added successfully!",
@@ -742,6 +909,15 @@ app.put("/api/suppliers/:id", async (req, res) => {
             });
         }
 
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Admin",
+            role: "admin",
+            module: "Suppliers",
+            action: "Updated Supplier",
+            details: `Updated supplier #${req.params.id} (${supplier_name.trim()})`
+        });
+
         res.json({
             success: true,
             message: "Supplier updated successfully!"
@@ -764,6 +940,15 @@ app.delete("/api/suppliers/:id", async (req, res) => {
                 message: "Supplier not found."
             });
         }
+
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Admin",
+            role: "admin",
+            module: "Suppliers",
+            action: "Deleted Supplier",
+            details: `Deleted supplier #${req.params.id}`
+        });
 
         res.json({
             success: true,
@@ -1104,6 +1289,15 @@ async function handleSaveSettings(req, res) {
             // File persistence already succeeded; ignore if MySQL is not running.
         }
 
+        await recordActivityLog({
+            username: String(body.actor_username || "admin"),
+            actor_name: String(body.actor_name || updated.adminName || "Admin"),
+            role: "admin",
+            module: "Settings",
+            action: "Updated Pharmacy Settings",
+            details: `Saved settings for ${updated.pharmacyName}`
+        });
+
         res.json({
             success: true,
             configured: true,
@@ -1122,6 +1316,401 @@ async function handleSaveSettings(req, res) {
 
 app.put("/api/settings", handleSaveSettings);
 app.post("/api/settings", handleSaveSettings);
+
+
+/* ===== AUTH & MY ACCOUNT API ===== */
+
+app.post("/api/auth/login", async (req, res) => {
+    try {
+        const username = String(req.body?.username || "").trim();
+        const password = String(req.body?.password || "");
+
+        if (!username || !password) {
+            return res.status(400).json({
+                message: "Please enter your username and password."
+            });
+        }
+
+        await ensureSchemaUpgrades();
+
+        const [rows] = await db.query(
+            `SELECT user_id, username, password_hash, full_name, email, role, status
+             FROM users
+             WHERE username = ?
+             LIMIT 1`,
+            [username]
+        );
+
+        if (rows.length === 0 || !verifyPassword(password, rows[0].password_hash)) {
+            return res.status(401).json({
+                message: "Invalid username or password."
+            });
+        }
+
+        const user = rows[0];
+        if (user.status !== "Active") {
+            return res.status(403).json({
+                message: "This account is currently inactive. Contact the administrator."
+            });
+        }
+
+        await recordActivityLog({
+            username: user.username,
+            actor_name: user.full_name,
+            role: user.role,
+            module: "Auth",
+            action: "Logged In",
+            details: `${user.role === "cashier" ? "Cashier" : "Admin"} signed in`
+        });
+
+        res.json({
+            success: true,
+            user: {
+                user_id: user.user_id,
+                username: user.username,
+                fullName: user.full_name,
+                email: user.email || "",
+                role: user.role,
+                status: user.status
+            }
+        });
+    } catch (error) {
+        console.error("Login error:", error.message);
+        sendDbError(res, error, "Unable to sign in.");
+    }
+});
+
+app.put("/api/account/profile", async (req, res) => {
+    try {
+        const username = String(req.body?.username || "").trim();
+        const fullName = String(req.body?.fullName || "").trim();
+        const email = String(req.body?.email || "").trim();
+
+        if (!username || !fullName) {
+            return res.status(400).json({
+                message: "Username and full name are required."
+            });
+        }
+
+        await ensureSchemaUpgrades();
+
+        const [rows] = await db.query(
+            "SELECT user_id, username, role FROM users WHERE username = ? LIMIT 1",
+            [username]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ message: "Account not found." });
+        }
+
+        const user = rows[0];
+        await db.query(
+            "UPDATE users SET full_name = ?, email = ? WHERE user_id = ?",
+            [fullName.slice(0, 120), email.slice(0, 150), user.user_id]
+        );
+
+        await recordActivityLog({
+            username: user.username,
+            actor_name: fullName,
+            role: user.role,
+            module: "Account",
+            action: "Updated Profile",
+            details: `Updated display name to ${fullName}`
+        });
+
+        res.json({
+            success: true,
+            message: "Profile updated successfully.",
+            user: {
+                user_id: user.user_id,
+                username: user.username,
+                fullName,
+                email,
+                role: user.role
+            }
+        });
+    } catch (error) {
+        console.error("Update profile error:", error.message);
+        sendDbError(res, error, "Unable to update profile.");
+    }
+});
+
+app.put("/api/account/password", async (req, res) => {
+    try {
+        const username = String(req.body?.username || "").trim();
+        const currentPassword = String(req.body?.currentPassword ?? req.body?.current_password ?? "");
+        const newPassword = String(req.body?.newPassword ?? req.body?.new_password ?? "");
+
+        if (!username || !currentPassword || !newPassword) {
+            return res.status(400).json({
+                message: "Current password and new password are required."
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                message: "New password must be at least 6 characters."
+            });
+        }
+
+        await ensureSchemaUpgrades();
+
+        const [rows] = await db.query(
+            "SELECT user_id, username, full_name, role, password_hash FROM users WHERE username = ? LIMIT 1",
+            [username]
+        );
+        if (rows.length === 0) {
+            return res.status(404).json({ message: "Account not found." });
+        }
+
+        const user = rows[0];
+        if (!verifyPassword(currentPassword, user.password_hash)) {
+            return res.status(401).json({
+                message: "Current password is incorrect."
+            });
+        }
+
+        await db.query(
+            "UPDATE users SET password_hash = ? WHERE user_id = ?",
+            [hashPassword(newPassword), user.user_id]
+        );
+
+        await recordActivityLog({
+            username: user.username,
+            actor_name: user.full_name,
+            role: user.role,
+            module: "Account",
+            action: "Changed Password",
+            details: `Password updated for ${user.username}`
+        });
+
+        res.json({
+            success: true,
+            message: "Password changed successfully."
+        });
+    } catch (error) {
+        console.error("Change password error:", error.message);
+        sendDbError(res, error, "Unable to change password.");
+    }
+});
+
+
+/* ===== CASHIER & USER MANAGEMENT API (ADMIN) ===== */
+
+app.get("/api/users", async (req, res) => {
+    try {
+        await ensureSchemaUpgrades();
+        const [rows] = await db.query(
+            `SELECT user_id, username, full_name, email, role, status, created_at
+             FROM users
+             ORDER BY role ASC, user_id ASC`
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error("Get users error:", error.message);
+        sendDbError(res, error, "Unable to load users.");
+    }
+});
+
+app.post("/api/users", async (req, res) => {
+    try {
+        const username = String(req.body?.username || "").trim();
+        const fullName = String(req.body?.full_name || "").trim();
+        const email = String(req.body?.email || "").trim();
+        const password = String(req.body?.password || "");
+        const role = req.body?.role === "admin" ? "admin" : "cashier";
+        const status = req.body?.status === "Inactive" ? "Inactive" : "Active";
+
+        if (!username || !fullName || password.length < 6) {
+            return res.status(400).json({
+                message: "Username, full name, and a password of at least 6 characters are required."
+            });
+        }
+
+        if (!/^[A-Za-z0-9_.-]{3,50}$/.test(username)) {
+            return res.status(400).json({
+                message: "Username must be 3–50 characters using letters, numbers, dots, underscores, or hyphens."
+            });
+        }
+
+        await ensureSchemaUpgrades();
+
+        const [existing] = await db.query(
+            "SELECT user_id FROM users WHERE username = ? LIMIT 1",
+            [username]
+        );
+        if (existing.length > 0) {
+            return res.status(409).json({
+                message: "Username already exists."
+            });
+        }
+
+        const [result] = await db.query(
+            `INSERT INTO users (username, password_hash, full_name, email, role, status)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [username, hashPassword(password), fullName, email, role, status]
+        );
+
+        await recordActivityLog({
+            username: req.body?.actor_username || "admin",
+            actor_name: req.body?.actor_name || "Admin",
+            role: "admin",
+            module: "Cashiers",
+            action: "Created Account",
+            details: `Created ${role} account '${username}' (${fullName})`
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Account created successfully.",
+            user_id: result.insertId
+        });
+    } catch (error) {
+        console.error("Create user error:", error.message);
+        sendDbError(res, error, "Unable to create account.");
+    }
+});
+
+app.put("/api/users/:id", async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        const fullName = String(req.body?.full_name || "").trim();
+        const email = String(req.body?.email || "").trim();
+        const status = req.body?.status === "Inactive" ? "Inactive" : "Active";
+        const newPassword = String(req.body?.password || "");
+
+        if (!Number.isInteger(id) || id <= 0 || !fullName) {
+            return res.status(400).json({
+                message: "Valid user ID and full name are required."
+            });
+        }
+
+        if (newPassword && newPassword.length < 6) {
+            return res.status(400).json({
+                message: "New password must be at least 6 characters."
+            });
+        }
+
+        await ensureSchemaUpgrades();
+
+        const [rows] = await db.query("SELECT * FROM users WHERE user_id = ? LIMIT 1", [id]);
+        if (rows.length === 0) {
+            return res.status(404).json({ message: "Account not found." });
+        }
+
+        if (rows[0].username === "admin" && status === "Inactive") {
+            return res.status(400).json({
+                message: "The primary administrator account cannot be deactivated."
+            });
+        }
+
+        if (newPassword) {
+            await db.query(
+                "UPDATE users SET full_name = ?, email = ?, status = ?, password_hash = ? WHERE user_id = ?",
+                [fullName, email, status, hashPassword(newPassword), id]
+            );
+        } else {
+            await db.query(
+                "UPDATE users SET full_name = ?, email = ?, status = ? WHERE user_id = ?",
+                [fullName, email, status, id]
+            );
+        }
+
+        await recordActivityLog({
+            username: req.body?.actor_username || "admin",
+            actor_name: req.body?.actor_name || "Admin",
+            role: "admin",
+            module: "Cashiers",
+            action: "Updated Account",
+            details: `Updated '${rows[0].username}' (${status})`
+        });
+
+        res.json({
+            success: true,
+            message: "Account updated successfully."
+        });
+    } catch (error) {
+        console.error("Update user error:", error.message);
+        sendDbError(res, error, "Unable to update account.");
+    }
+});
+
+app.delete("/api/users/:id", async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(400).json({ message: "Invalid user ID." });
+        }
+        if (id === 1) {
+            return res.status(400).json({
+                message: "Cannot delete the primary administrator account."
+            });
+        }
+
+        await ensureSchemaUpgrades();
+
+        const [rows] = await db.query("SELECT * FROM users WHERE user_id = ? LIMIT 1", [id]);
+        if (rows.length === 0) {
+            return res.status(404).json({ message: "Account not found." });
+        }
+        if (rows[0].username === "admin") {
+            return res.status(400).json({
+                message: "Cannot delete the primary administrator account."
+            });
+        }
+
+        await db.query("DELETE FROM users WHERE user_id = ?", [id]);
+
+        await recordActivityLog({
+            username: "admin",
+            actor_name: "Admin",
+            role: "admin",
+            module: "Cashiers",
+            action: "Deleted Account",
+            details: `Deleted account '${rows[0].username}'`
+        });
+
+        res.json({
+            success: true,
+            message: "Account deleted successfully."
+        });
+    } catch (error) {
+        console.error("Delete user error:", error.message);
+        sendDbError(res, error, "Unable to delete account.");
+    }
+});
+
+
+/* ===== ACTIVITY LOGS API (ADMIN) ===== */
+
+app.get("/api/activity-logs", async (req, res) => {
+    try {
+        await ensureSchemaUpgrades();
+        const [rows] = await db.query(
+            `SELECT log_id, username, actor_name, role, module, action, details, created_at
+             FROM activity_logs
+             ORDER BY log_id DESC
+             LIMIT 200`
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error("Get activity logs error:", error.message);
+        sendDbError(res, error, "Unable to load activity logs.");
+    }
+});
+
+app.post("/api/activity-logs", async (req, res) => {
+    try {
+        const { username, actor_name, role, module, action, details } = req.body || {};
+        if (!module || !action) {
+            return res.status(400).json({ message: "Module and action are required." });
+        }
+        await recordActivityLog({ username, actor_name, role, module, action, details });
+        res.status(201).json({ success: true });
+    } catch (error) {
+        console.error("Create activity log error:", error.message);
+        sendDbError(res, error, "Unable to record activity log.");
+    }
+});
 
 
 // Start server

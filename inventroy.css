@@ -332,6 +332,35 @@
     font-size: 13.5px;
 }
 
+.account-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+}
+
+.badge.role-admin {
+    background: #E0F5F1;
+    color: #067D70;
+}
+
+.badge.role-cashier {
+    background: #E8F2FF;
+    color: #1D5FD6;
+}
+
+.sales-report-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 900px) {
+    .account-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 @media (max-width: 700px) {
     .inventory-summary {
         grid-template-columns: 1fr;

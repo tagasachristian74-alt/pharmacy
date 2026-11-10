@@ -39,7 +39,7 @@
             <a href="#dashboard"
                class="nav-link active"
                data-page="dashboard"
-               data-roles="admin"
+               data-roles="admin,cashier"
                aria-current="page">
                 <span>▦</span> Dashboard
             </a>
@@ -55,7 +55,7 @@
                class="nav-link"
                data-page="sales"
                data-roles="admin,cashier">
-                <span>▣</span> Sales (POS)
+                <span>▣</span> <strong class="nav-text-label" id="navSalesLabel">Sales Reports</strong>
             </a>
 
             <a href="#purchase"
@@ -79,11 +79,32 @@
                 <span>◷</span> Expiration
             </a>
 
+            <a href="#cashiers"
+               class="nav-link"
+               data-page="cashiers"
+               data-roles="admin">
+                <span>👥</span> Cashiers
+            </a>
+
+            <a href="#logs"
+               class="nav-link"
+               data-page="logs"
+               data-roles="admin">
+                <span>☰</span> Activity Logs
+            </a>
+
             <a href="#settings"
                class="nav-link"
                data-page="settings"
                data-roles="admin">
                 <span>⚙</span> Settings
+            </a>
+
+            <a href="#account"
+               class="nav-link"
+               data-page="account"
+               data-roles="admin,cashier">
+                <span>👤</span> My Account
             </a>
 
         </nav>
@@ -214,7 +235,7 @@
 
                     <h1>Dashboard</h1>
 
-                    <p class="subtitle">
+                    <p class="subtitle" id="dashboardSubtitle">
                         Welcome back! Here's what's happening
                         in your pharmacy.
                     </p>
@@ -233,14 +254,14 @@
                 <article class="stat-card">
                     <div class="stat-top">
                         <div>
-                            <p>Total Medicines</p>
-                            <h2 id="totalMedicines">150</h2>
+                            <p id="medCardTitle">Total Medicines</p>
+                            <h2 id="totalMedicines">5</h2>
                         </div>
 
                         <div class="stat-icon blue">▤</div>
                     </div>
 
-                    <p class="stat-note">
+                    <p class="stat-note" id="medCardNote">
                         Medicines in inventory
                     </p>
                 </article>
@@ -249,15 +270,15 @@
                 <article class="stat-card">
                     <div class="stat-top">
                         <div>
-                            <p>Total Sales</p>
-                            <h2 id="totalSales">₱25,430</h2>
+                            <p id="salesCardTitle">Total Sales</p>
+                            <h2 id="totalSales">₱0.00</h2>
                         </div>
 
-                        <div class="stat-icon green">₱</div>
+                        <div class="stat-icon green" id="salesCardIcon">₱</div>
                     </div>
 
-                    <p class="stat-note">
-                        Monthly revenue overview
+                    <p class="stat-note" id="salesCardNote">
+                        Live cumulative sales revenue
                     </p>
                 </article>
 
@@ -266,7 +287,7 @@
                     <div class="stat-top">
                         <div>
                             <p>Low Stock</p>
-                            <h2 id="lowStock">12</h2>
+                            <h2 id="lowStock">0</h2>
                         </div>
 
                         <div class="stat-icon orange">⚠</div>
@@ -282,7 +303,7 @@
                     <div class="stat-top">
                         <div>
                             <p>Expired / Expiring</p>
-                            <h2 id="expiringSoon">8</h2>
+                            <h2 id="expiringSoon">0</h2>
                         </div>
 
                         <div class="stat-icon red">◷</div>
@@ -296,80 +317,93 @@
             </section>
 
 
-            <!-- SALES CHART AND LOW STOCK -->
+            <!-- SALES CHART / CASHIER SHIFT PANEL AND LOW STOCK -->
             <section class="dashboard-grid">
 
-                <!-- SALES OVERVIEW -->
-                <article class="panel sales-panel">
+                <!-- ADMIN: LIVE SALES OVERVIEW -->
+                <article class="panel sales-panel" id="salesOverviewPanel">
 
                     <div class="panel-heading">
                         <div>
                             <h3>Sales Overview</h3>
-                            <p>Sales performance summary</p>
+                            <p id="salesChartSubtitle">Live sales performance connected to POS &amp; inventory</p>
                         </div>
 
                         <select id="salesPeriod"
                                 aria-label="Sales period">
-                            <option value="week">This Week</option>
-                            <option value="month" selected>
-                                This Month
-                            </option>
+                            <option value="today">Today (Hourly)</option>
+                            <option value="week">Last 7 Days</option>
+                            <option value="month" selected>This Month</option>
+                            <option value="year">This Year</option>
                         </select>
                     </div>
 
                     <div class="chart-summary">
-                        <strong id="chartTotal">₱25,430</strong>
-                        <span>Period total</span>
+                        <strong id="chartTotal">₱0.00</strong>
+                        <span id="chartMetaSummary">0 transactions · Avg ₱0.00</span>
                     </div>
 
                     <div class="chart" id="salesChart">
-                        <div class="chart-grid">
-                            <span>₱20k</span>
-                            <span>₱15k</span>
-                            <span>₱10k</span>
-                            <span>₱5k</span>
+                        <div class="chart-grid" id="chartGridLabels">
+                            <span>₱4k</span>
+                            <span>₱3k</span>
+                            <span>₱2k</span>
+                            <span>₱1k</span>
                             <span>₱0</span>
                         </div>
 
-                        <div class="bar-area">
+                        <div class="bar-area" id="chartBarArea"></div>
 
-                            <div class="bar-column">
-                                <div class="bar" style="height:30%"></div>
-                                <small>01</small>
-                            </div>
+                    </div>
 
-                            <div class="bar-column">
-                                <div class="bar" style="height:45%"></div>
-                                <small>05</small>
-                            </div>
+                </article>
 
-                            <div class="bar-column">
-                                <div class="bar" style="height:38%"></div>
-                                <small>10</small>
-                            </div>
+                <!-- CASHIER: OPERATIONAL SHIFT WORKSPACE -->
+                <article class="panel sales-panel" id="cashierShiftPanel" hidden>
 
-                            <div class="bar-column">
-                                <div class="bar" style="height:62%"></div>
-                                <small>15</small>
-                            </div>
-
-                            <div class="bar-column">
-                                <div class="bar" style="height:55%"></div>
-                                <small>20</small>
-                            </div>
-
-                            <div class="bar-column">
-                                <div class="bar" style="height:78%"></div>
-                                <small>25</small>
-                            </div>
-
-                            <div class="bar-column">
-                                <div class="bar" style="height:90%"></div>
-                                <small>30</small>
-                            </div>
-
+                    <div class="panel-heading">
+                        <div>
+                            <h3>Cashier Shift Overview</h3>
+                            <p>Operational shortcuts &amp; stock reminders for your shift</p>
                         </div>
+                    </div>
 
+                    <div class="operational-actions-grid">
+                        <a href="#sales" class="quick-action-tile primary" data-page="sales">
+                            <span class="tile-icon">▣</span>
+                            <div>
+                                <strong>Open POS Checkout</strong>
+                                <small>Process customer purchases &amp; print receipts</small>
+                            </div>
+                        </a>
+
+                        <a href="#inventory" class="quick-action-tile" data-page="inventory">
+                            <span class="tile-icon">▤</span>
+                            <div>
+                                <strong>Check Stock &amp; Prices</strong>
+                                <small>Read-only medicine lookup &amp; active discounts</small>
+                            </div>
+                        </a>
+
+                        <a href="#expiration" class="quick-action-tile" data-page="expiration">
+                            <span class="tile-icon">◷</span>
+                            <div>
+                                <strong>Expiration Alerts</strong>
+                                <small>Verify batches expiring soon before dispensing</small>
+                            </div>
+                        </a>
+
+                        <a href="#account" class="quick-action-tile" data-page="account">
+                            <span class="tile-icon">👤</span>
+                            <div>
+                                <strong>My Account</strong>
+                                <small>Update your profile name or change password</small>
+                            </div>
+                        </a>
+                    </div>
+
+                    <div class="operational-shift-note" id="cashierShiftSummaryNote">
+                        Today's shift activity is synced automatically with POS checkout and stock levels.
                     </div>
 
                 </article>
@@ -381,7 +415,7 @@
                     <div class="panel-heading">
                         <div>
                             <h3>Low Stock Medicines</h3>
-                            <p>Medicines needing reorder</p>
+                            <p id="lowStockSubtitle">Medicines running low on stock</p>
                         </div>
 
                         <a href="#inventory"
@@ -403,69 +437,16 @@
                                 </tr>
                             </thead>
 
-                            <tbody>
-
-                                <tr>
-                                    <td>
-                                        <strong>Paracetamol 500mg</strong>
-                                        <small>Tablet</small>
-                                    </td>
-                                    <td>5</td>
-                                    <td>
-                                        <span class="badge danger">
-                                            Low
-                                        </span>
-                                    </td>
-                                </tr>
-
-                                <tr>
-                                    <td>
-                                        <strong>Amoxicillin 500mg</strong>
-                                        <small>Capsule</small>
-                                    </td>
-                                    <td>8</td>
-                                    <td>
-                                        <span class="badge danger">
-                                            Low
-                                        </span>
-                                    </td>
-                                </tr>
-
-                                <tr>
-                                    <td>
-                                        <strong>Cetirizine 10mg</strong>
-                                        <small>Tablet</small>
-                                    </td>
-                                    <td>10</td>
-                                    <td>
-                                        <span class="badge warning">
-                                            Low
-                                        </span>
-                                    </td>
-                                </tr>
-
-                                <tr>
-                                    <td>
-                                        <strong>Ibuprofen 400mg</strong>
-                                        <small>Tablet</small>
-                                    </td>
-                                    <td>6</td>
-                                    <td>
-                                        <span class="badge danger">
-                                            Low
-                                        </span>
-                                    </td>
-                                </tr>
-
-                            </tbody>
+                            <tbody></tbody>
 
                         </table>
 
                     </div>
 
-                    <a href="#suppliers"
+                    <a href="#purchase"
                        class="reorder-link"
-                       data-page="suppliers">
+                       id="manageReordersLink"
+                       data-page="purchase">
                         Manage Reorders →
                     </a>
 
@@ -474,17 +455,18 @@
             </section>
 
 
-            <!-- RECENT SALES -->
+            <!-- RECENT SALES / OWN TRANSACTIONS -->
             <section class="panel recent-panel">
 
                 <div class="panel-heading">
                     <div>
-                        <h3>Recent Sales</h3>
-                        <p>Latest pharmacy transactions</p>
+                        <h3 id="recentSalesHeading">Recent Sales</h3>
+                        <p id="recentSalesSubheading">Latest pharmacy transactions across all cashiers</p>
                     </div>
 
                     <a href="#sales"
                        class="view-all"
+                       id="recentSalesViewAll"
                        data-page="sales">
                         View All →
                     </a>
@@ -498,50 +480,14 @@
                             <tr>
                                 <th>Receipt No.</th>
                                 <th>Date</th>
+                                <th>Cashier</th>
                                 <th>Items</th>
                                 <th>Total Amount</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
 
-                        <tbody>
-
-                            <tr>
-                                <td>EP-0001</td>
-                                <td>Oct 24, 2026</td>
-                                <td>3 items</td>
-                                <td>₱450.00</td>
-                                <td>
-                                    <span class="badge success">
-                                        Completed
-                                    </span>
-                                </td>
-                            </tr>
-
-                            <tr>
-                                <td>EP-0002</td>
-                                <td>Oct 24, 2026</td>
-                                <td>2 items</td>
-                                <td>₱320.00</td>
-                                <td>
-                                    <span class="badge success">
-                                        Completed
-                                    </span>
-                                </td>
-                            </tr>
-                            <tr>
-                                <td>EP-0003</td>
-                                <td>Oct 23, 2026</td>
-                                <td>4 items</td>
-                                <td>₱580.00</td>
-                                <td>
-                                    <span class="badge success">
-                                        Completed
-                                    </span>
-                                </td>
-                            </tr>
-
-                        </tbody>
+                        <tbody></tbody>
 
                     </table>
 
