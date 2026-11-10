@@ -160,8 +160,11 @@ if (globalSearch) {
 
 if (notificationButton) {
     notificationButton.addEventListener("click", function () {
+        const brandName = (window.EPharmaBranding
+            ? window.EPharmaBranding.getCachedSettings().pharmacyName
+            : "E-Pharma").toUpperCase();
         alert(
-            "E-PHARMA NOTIFICATIONS\n\n" +
+            brandName + " NOTIFICATIONS\n\n" +
             "• Check medicines with low stock.\n" +
             "• Review medicines nearing expiration.\n\n" +
             "Sample notifications only."
