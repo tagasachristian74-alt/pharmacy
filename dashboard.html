@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>E-Pharma | Pharmacy Management System</title>
+
+    <link rel="icon" href="assets/default-logo.svg">
+    <link rel="stylesheet" href="dashboard.css">
+    <link rel="stylesheet" href="inventroy.css">
+</head>
+<body>
+
+<div class="app-layout">
+
+    <!-- ===================================
+         FIXED SIDEBAR NAVIGATION
+    ==================================== -->
+    <aside class="sidebar" id="sidebar">
+
+        <div class="brand">
+            <div class="brand-icon" id="sidebarBrandLogoWrap">
+                <img src="assets/default-logo.svg"
+                     alt="E-Pharma Logo"
+                     id="sidebarBrandLogo"
+                     class="brand-logo-img">
+            </div>
+            <div class="brand-text">
+                <h2 id="sidebarBrandName">E-Pharma</h2>
+                <small id="sidebarBrandSubtitle">Pharmacy Management</small>
+            </div>
+        </div>
+
+        <p class="menu-label">MAIN MENU</p>
+
+        <nav class="navigation" aria-label="Main navigation">
+
+            <a href="#dashboard"
+               class="nav-link active"
+               data-page="dashboard"
+               aria-current="page">
+                <span>▦</span> Dashboard
+            </a>
+
+            <a href="#inventory"
+               class="nav-link"
+               data-page="inventory">
+                <span>▤</span> Inventory
+            </a>
+
+            <a href="#sales"
+               class="nav-link"
+               data-page="sales">
+                <span>▣</span> Sales
+            </a>
+
+            <a href="#purchase"
+               class="nav-link"
+               data-page="purchase">
+                <span>🛒</span> Purchase
+            </a>
+
+            <a href="#suppliers"
+               class="nav-link"
+               data-page="suppliers">
+                <span>♧</span> Suppliers
+            </a>
+
+            <a href="#expiration"
+               class="nav-link"
+               data-page="expiration">
+                <span>◷</span> Expiration
+            </a>
+
+            <a href="#settings"
+               class="nav-link"
+               data-page="settings">
+                <span>⚙</span> Settings
+            </a>
+
+        </nav>
+
+        <div class="sidebar-bottom">
+
+            <div class="user-profile">
+                <div class="avatar" id="sidebarAdminAvatar">A</div>
+
+                <div>
+                    <strong id="sidebarAdminName">Administrator</strong>
+                    <small>Pharmacy Admin</small>
+                </div>
+            </div>
+
+            <button type="button"
+                    class="logout-button"
+                    id="logoutButton">
+                ↪ <span>Logout</span>
+            </button>
+
+        </div>
+
+    </aside>
+
+
+    <!-- ===================================
+         MAIN CONTENT AREA
+         Sidebar stays visible while
+         pageContent changes.
+    ==================================== -->
+    <main class="main-content">
+
+        <!-- TOPBAR: DOES NOT DISAPPEAR -->
+        <header class="topbar">
+
+            <button type="button"
+                    class="menu-toggle"
+                    id="menuToggle"
+                    aria-label="Toggle navigation"
+                    aria-controls="sidebar"
+                    aria-expanded="false">
+                ☰
+            </button>
+
+            <div class="search-box">
+                <span>⌕</span>
+
+                <input
+                    type="search"
+                    id="globalSearch"
+                    placeholder="Search medicines, sales..."
+                    aria-label="Search dashboard records">
+            </div>
+
+           
+<div class="topbar-right">
+
+    <!-- NOTIFICATION BUTTON AND PANEL -->
+    <div class="notification-wrapper">
+
+        <button type="button"
+                class="notification-button"
+                id="notificationButton"
+                aria-label="View notifications"
+                aria-expanded="false"
+                aria-controls="notificationPanel">
+
+            <span class="notification-bell">🔔</span>
+            <span id="notificationCount" class="notification-count">0</span>
+
+        </button>
+
+        <!-- NOTIFICATION DROPDOWN -->
+        <div id="notificationPanel"
+             class="notification-panel"
+             role="dialog"
+             aria-label="Notifications"
+             hidden>
+
+            <div class="notification-panel-header">
+                <h3>Notifications</h3>
+
+                <button type="button" id="markNotificationsRead">
+                    Mark all read
+                </button>
+            </div>
+
+            <div id="notificationList">
+                <div class="notification-empty">
+                    <p>No alerts right now.</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- ADMIN PROFILE -->
+    <div class="topbar-user">
+
+        <div class="avatar" id="topbarAdminAvatar">A</div>
+
+        <div class="topbar-user-info">
+            <strong id="topbarAdminName">Admin</strong>
+            <small>Administrator</small>
+        </div>
+
+    </div>
+
+</div>
+
+
+        </header>
+        <!-- ===================================
+             ONLY THIS CONTENT CHANGES
+        ==================================== -->
+        <div id="pageContent">
+
+            <!-- DASHBOARD HEADING -->
+            <section class="page-heading">
+
+                <div>
+                    <p class="breadcrumb">
+                        Main Menu / Dashboard
+                    </p>
+
+                    <h1>Dashboard</h1>
+
+                    <p class="subtitle">
+                        Welcome back! Here's what's happening
+                        in your pharmacy.
+                    </p>
+                </div>
+
+                <div class="date-display" id="currentDate">
+                    Loading date...
+                </div>
+
+            </section>
+
+
+            <!-- DASHBOARD STATISTICS -->
+            <section class="stats-grid">
+
+                <article class="stat-card">
+                    <div class="stat-top">
+                        <div>
+                            <p>Total Medicines</p>
+                            <h2 id="totalMedicines">150</h2>
+                        </div>
+
+                        <div class="stat-icon blue">▤</div>
+                    </div>
+
+                    <p class="stat-note">
+                        Medicines in inventory
+                    </p>
+                </article>
+
+
+                <article class="stat-card">
+                    <div class="stat-top">
+                        <div>
+                            <p>Total Sales</p>
+                            <h2 id="totalSales">₱25,430</h2>
+                        </div>
+
+                        <div class="stat-icon green">₱</div>
+                    </div>
+
+                    <p class="stat-note">
+                        Sample monthly sales
+                    </p>
+                </article>
+
+
+                <article class="stat-card">
+                    <div class="stat-top">
+                        <div>
+                            <p>Low Stock</p>
+                            <h2 id="lowStock">12</h2>
+                        </div>
+
+                        <div class="stat-icon orange">⚠</div>
+                    </div>
+
+                    <p class="stat-note warning-text">
+                        Needs attention
+                    </p>
+                </article>
+
+
+                <article class="stat-card">
+                    <div class="stat-top">
+                        <div>
+                            <p>Expired / Expiring</p>
+                            <h2 id="expiringSoon">8</h2>
+                        </div>
+
+                        <div class="stat-icon red">◷</div>
+                    </div>
+
+                    <p class="stat-note danger-text">
+                        Check expiration dates
+                    </p>
+                </article>
+
+            </section>
+
+
+            <!-- SALES CHART AND LOW STOCK -->
+            <section class="dashboard-grid">
+
+                <!-- SALES OVERVIEW -->
+                <article class="panel sales-panel">
+
+                    <div class="panel-heading">
+                        <div>
+                            <h3>Sales Overview</h3>
+                            <p>Sample sales performance</p>
+                        </div>
+
+                        <select id="salesPeriod"
+                                aria-label="Sales period">
+                            <option value="week">This Week</option>
+                            <option value="month" selected>
+                                This Month
+                            </option>
+                        </select>
+                    </div>
+
+                    <div class="chart-summary">
+                        <strong id="chartTotal">₱25,430</strong>
+                        <span>Sample total</span>
+                    </div>
+
+                    <div class="chart" id="salesChart">
+                        <div class="chart-grid">
+                            <span>₱20k</span>
+                            <span>₱15k</span>
+                            <span>₱10k</span>
+                            <span>₱5k</span>
+                            <span>₱0</span>
+                        </div>
+
+                        <div class="bar-area">
+
+                            <div class="bar-column">
+                                <div class="bar" style="height:30%"></div>
+                                <small>01</small>
+                            </div>
+
+                            <div class="bar-column">
+                                <div class="bar" style="height:45%"></div>
+                                <small>05</small>
+                            </div>
+
+                            <div class="bar-column">
+                                <div class="bar" style="height:38%"></div>
+                                <small>10</small>
+                            </div>
+
+                            <div class="bar-column">
+                                <div class="bar" style="height:62%"></div>
+                                <small>15</small>
+                            </div>
+
+                            <div class="bar-column">
+                                <div class="bar" style="height:55%"></div>
+                                <small>20</small>
+                            </div>
+
+                            <div class="bar-column">
+                                <div class="bar" style="height:78%"></div>
+                                <small>25</small>
+                            </div>
+
+                            <div class="bar-column">
+                                <div class="bar" style="height:90%"></div>
+                                <small>30</small>
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </article>
+
+
+                <!-- LOW STOCK MEDICINES -->
+                <article class="panel">
+
+                    <div class="panel-heading">
+                        <div>
+                            <h3>Low Stock Medicines</h3>
+                            <p>Medicines needing reorder</p>
+                        </div>
+
+                        <a href="#inventory"
+                           class="view-all"
+                           data-page="inventory">
+                            View All →
+                        </a>
+                    </div>
+
+                    <div class="table-wrapper">
+
+                        <table id="lowStockTable">
+
+                            <thead>
+                                <tr>
+                                    <th>Medicine</th>
+                                    <th>Stock</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+
+                            <tbody>
+
+                                <tr>
+                                    <td>
+                                        <strong>Paracetamol 500mg</strong>
+                                        <small>Tablet</small>
+                                    </td>
+                                    <td>5</td>
+                                    <td>
+                                        <span class="badge danger">
+                                            Low
+                                        </span>
+                                    </td>
+                                </tr>
+
+                                <tr>
+                                    <td>
+                                        <strong>Amoxicillin 500mg</strong>
+                                        <small>Capsule</small>
+                                    </td>
+                                    <td>8</td>
+                                    <td>
+                                        <span class="badge danger">
+                                            Low
+                                        </span>
+                                    </td>
+                                </tr>
+
+                                <tr>
+                                    <td>
+                                        <strong>Cetirizine 10mg</strong>
+                                        <small>Tablet</small>
+                                    </td>
+                                    <td>10</td>
+                                    <td>
+                                        <span class="badge warning">
+                                            Low
+                                        </span>
+                                    </td>
+                                </tr>
+
+                                <tr>
+                                    <td>
+                                        <strong>Ibuprofen 400mg</strong>
+                                        <small>Tablet</small>
+                                    </td>
+                                    <td>6</td>
+                                    <td>
+                                        <span class="badge danger">
+                                            Low
+                                        </span>
+                                    </td>
+                                </tr>
+
+                            </tbody>
+
+                        </table>
+
+                    </div>
+
+                    <a href="#suppliers"
+                       class="reorder-link"
+                       data-page="suppliers">
+                        Manage Reorders →
+                    </a>
+
+                </article>
+
+            </section>
+
+
+            <!-- RECENT SALES -->
+            <section class="panel recent-panel">
+
+                <div class="panel-heading">
+                    <div>
+                        <h3>Recent Sales</h3>
+                        <p>Latest sample transactions</p>
+                    </div>
+
+                    <a href="#sales"
+                       class="view-all"
+                       data-page="sales">
+                        View All →
+                    </a>
+                </div>
+
+                <div class="table-wrapper">
+
+                    <table id="recentSalesTable">
+
+                        <thead>
+                            <tr>
+                                <th>Receipt No.</th>
+                                <th>Date</th>
+                                <th>Items</th>
+                                <th>Total Amount</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+
+                            <tr>
+                                <td>EP-0001</td>
+                                <td>Oct 24, 2026</td>
+                                <td>3 items</td>
+                                <td>₱450.00</td>
+                                <td>
+                                    <span class="badge success">
+                                        Completed
+                                    </span>
+                                </td>
+                            </tr>
+
+                            <tr>
+                                <td>EP-0002</td>
+                                <td>Oct 24, 2026</td>
+                                <td>2 items</td>
+                                <td>₱320.00</td>
+                                <td>
+                                    <span class="badge success">
+                                        Completed
+                                    </span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>EP-0003</td>
+                                <td>Oct 23, 2026</td>
+                                <td>4 items</td>
+                                <td>₱580.00</td>
+                                <td>
+                                    <span class="badge success">
+                                        Completed
+                                    </span>
+                                </td>
+                            </tr>
+
+                        </tbody>
+
+                    </table>
+
+                </div>
+
+            </section>
+
+        </div>
+        <!-- END pageContent -->
+
+
+        <footer class="page-footer">
+            <span id="footerPharmacyName">E-Pharma Pharmacy Management System</span>
+            <span id="footerPharmacyAddress">Pharmacy Management · 2026</span>
+        </footer>
+
+    </main>
+
+</div>
+
+<!-- JavaScript -->
+<script src="pharmacy-branding.js"></script>
+<script src="dashboard.js"></script>
+
+</body>
+</html>

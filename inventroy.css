@@ -1,0 +1,748 @@
+/* E-PHARMA INVENTORY */
+
+.inventory-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+.inventory-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.inventory-search,
+.inventory-filter {
+    min-height: 40px;
+    border: 1px solid #E0E8EB;
+    border-radius: 8px;
+    background: #FFFFFF;
+    padding: 0 12px;
+    color: #172B35;
+    outline: none;
+}
+
+.inventory-search {
+    width: min(300px, 100%);
+}
+
+.inventory-filter:focus,
+.inventory-search:focus,
+.inventory-form input:focus,
+.inventory-form select:focus {
+    border-color: #079B89;
+    box-shadow: 0 0 0 3px rgba(7,155,137,0.10);
+}
+
+.inventory-button {
+    min-height: 40px;
+    border: none;
+    border-radius: 8px;
+    padding: 0 15px;
+    background: #079B89;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.inventory-button:hover {
+    background: #067D70;
+}
+
+.inventory-button.secondary {
+    background: #E8F5F2;
+    color: #067D70;
+}
+
+.inventory-button.danger {
+    background: #FCE8E9;
+    color: #C93643;
+}
+
+.inventory-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.inventory-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.inventory-summary-card {
+    background: white;
+    border: 1px solid #E4ECEF;
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.inventory-summary-card p {
+    color: #7A8A92;
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+
+.inventory-summary-card h3 {
+    font-size: 25px;
+    color: #172B35;
+}
+
+.inventory-table td {
+    vertical-align: middle;
+}
+
+.inventory-table .action-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.inventory-table .action-buttons button {
+    border: 1px solid #E0E8EB;
+    border-radius: 6px;
+    background: white;
+    padding: 7px 9px;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.inventory-table .action-buttons button:hover {
+    background: #E8F5F2;
+}
+
+.inventory-table .action-buttons .delete-button:hover {
+    background: #FCE8E9;
+}
+
+.inventory-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 20px;
+}
+
+.inventory-form .form-field {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.inventory-form label {
+    font-size: 12px;
+    font-weight: bold;
+    color: #435760;
+}
+
+.inventory-form input,
+.inventory-form select {
+    width: 100%;
+    height: 42px;
+    border: 1px solid #E0E8EB;
+    border-radius: 8px;
+    padding: 0 11px;
+    background: #FFFFFF;
+    outline: none;
+}
+
+.inventory-form .form-full {
+    grid-column: 1 / -1;
+}
+
+.inventory-form .form-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    grid-column: 1 / -1;
+    margin-top: 5px;
+}
+
+.inventory-message {
+    margin-top: 12px;
+    font-size: 12px;
+    color: #067D70;
+}
+
+.inventory-empty {
+    text-align: center;
+    color: #7A8A92;
+    padding: 30px 12px;
+}
+
+@media (max-width: 700px) {
+    .inventory-summary {
+        grid-template-columns: 1fr;
+    }
+
+    .inventory-form {
+        grid-template-columns: 1fr;
+    }
+
+    .inventory-form .form-full,
+    .inventory-form .form-buttons {
+        grid-column: 1;
+    }
+
+    .inventory-toolbar {
+        align-items: stretch;
+    }
+
+    .inventory-search {
+        width: 100%;
+    }
+}
+
+/* ===== SUPPLIERS PAGE DESIGN ===== */
+
+#pageContent .page-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 28px;
+}
+
+#pageContent .page-heading h1 {
+    margin: 0 0 6px;
+    font-size: 30px;
+    font-weight: 700;
+    color: #172b4d;
+}
+
+#pageContent .page-heading p {
+    margin: 0;
+    color: #64748b;
+    font-size: 14px;
+}
+
+/* Main buttons */
+#pageContent .primary-btn,
+#pageContent .secondary-btn,
+#pageContent .danger-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 40px;
+    padding: 10px 16px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, transform 0.2s ease;
+}
+
+#pageContent .primary-btn {
+    background: #0f766e;
+    color: #ffffff;
+    border-color: #0f766e;
+}
+
+#pageContent .primary-btn:hover {
+    background: #115e59;
+    transform: translateY(-1px);
+}
+
+#pageContent .secondary-btn {
+    background: #ffffff;
+    color: #334155;
+    border-color: #dbe3ec;
+}
+
+#pageContent .secondary-btn:hover {
+    background: #f1f5f9;
+}
+
+#pageContent .danger-btn {
+    background: #fff1f2;
+    color: #be123c;
+    border-color: #fecdd3;
+}
+
+#pageContent .danger-btn:hover {
+    background: #ffe4e6;
+}
+
+/* Search bar */
+#pageContent #supplierSearch {
+    display: block;
+    width: 100%;
+    max-width: 340px;
+    height: 42px;
+    box-sizing: border-box;
+    padding: 0 14px;
+    border: 1px solid #dbe3ec;
+    border-radius: 9px;
+    background: #ffffff;
+    color: #1e293b;
+    font-family: inherit;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+#pageContent #supplierSearch:focus {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+#pageContent #supplierSearch::placeholder {
+    color: #94a3b8;
+}
+
+/* Table header and spacing */
+#pageContent .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+}
+
+#pageContent .panel-header h2 {
+    margin: 0;
+    color: #172b4d;
+    font-size: 21px;
+}
+
+#pageContent .table-container {
+    width: 100%;
+    overflow-x: auto;
+}
+
+#pageContent .table-container table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+#pageContent .table-container th {
+    padding: 14px 12px;
+    background: #f1f5f9;
+    color: #475569;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+#pageContent .table-container td {
+    padding: 15px 12px;
+    border-bottom: 1px solid #e8edf3;
+    color: #334155;
+    font-size: 13px;
+    vertical-align: middle;
+}
+
+#pageContent .table-container tbody tr:hover {
+    background: #f8fafc;
+}
+
+#pageContent .table-container td .secondary-btn,
+#pageContent .table-container td .danger-btn {
+    min-height: 32px;
+    padding: 6px 10px;
+    margin: 2px;
+    font-size: 12px;
+}
+
+/* Supplier form */
+#pageContent #supplierForm {
+    padding: 22px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #f8fafc;
+}
+
+#pageContent #supplierForm .form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    margin-bottom: 20px;
+}
+
+#pageContent #supplierForm .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+#pageContent #supplierForm label {
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+#pageContent #supplierForm input,
+#pageContent #supplierForm select {
+    width: 100%;
+    min-height: 42px;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1e293b;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+}
+
+#pageContent #supplierForm input:focus,
+#pageContent #supplierForm select:focus {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.10);
+}
+
+#pageContent #supplierMessage {
+    font-size: 13px;
+}
+
+@media (max-width: 700px) {
+    #pageContent #supplierForm .form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    #pageContent #supplierSearch {
+        max-width: 100%;
+    }
+
+    #pageContent .panel-header {
+        align-items: stretch;
+    }
+}
+
+/* ===== EXPIRATION PAGE ===== */
+
+#pageContent #expirationSearch {
+    width: 100%;
+    max-width: 320px;
+    height: 42px;
+    box-sizing: border-box;
+    padding: 0 14px;
+    border: 1px solid #dbe3ec;
+    border-radius: 9px;
+    background: #fff;
+    color: #1e293b;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+}
+
+#pageContent #expirationSearch:focus,
+#pageContent #expirationFilter:focus {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.10);
+}
+
+#pageContent .filter-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+    color: #475569;
+    font-size: 14px;
+}
+
+#pageContent #expirationFilter {
+    min-height: 40px;
+    padding: 8px 12px;
+    border: 1px solid #dbe3ec;
+    border-radius: 8px;
+    background: #fff;
+    color: #334155;
+    font: inherit;
+}
+
+@media (max-width: 600px) {
+    #pageContent #expirationSearch {
+        max-width: 100%;
+    }
+
+    #pageContent .filter-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+}
+
+/* ===== SETTINGS PAGE ===== */
+
+#pageContent .settings-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 22px;
+}
+
+#pageContent .settings-panel {
+    padding: 26px;
+}
+
+#pageContent .settings-heading {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 24px;
+}
+
+#pageContent .settings-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+    border-radius: 12px;
+    background: #e0f2f1;
+    font-size: 23px;
+}
+
+#pageContent .settings-heading h2 {
+    margin: 0 0 5px;
+    color: #172b4d;
+    font-size: 19px;
+}
+
+#pageContent .settings-heading p {
+    margin: 0;
+    color: #64748b;
+    font-size: 13px;
+}
+
+#pageContent .settings-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    margin-bottom: 22px;
+}
+
+#pageContent .settings-panel .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+#pageContent .settings-panel .form-group label {
+    color: #334155;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+#pageContent .settings-panel .form-group input,
+#pageContent .settings-panel .form-group select {
+    width: 100%;
+    min-height: 43px;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px solid #dbe3ec;
+    border-radius: 9px;
+    background: #fff;
+    color: #1e293b;
+    font: inherit;
+    font-size: 14px;
+    outline: none;
+}
+
+#pageContent .settings-panel .form-group input:focus,
+#pageContent .settings-panel .form-group select:focus {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.10);
+}
+
+#pageContent .settings-panel .form-group.form-group-full {
+    grid-column: 1 / -1;
+}
+
+#pageContent .pharmacy-brand-editor {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+    padding: 18px;
+    margin-bottom: 22px;
+    border: 1px solid #dbe7e8;
+    border-radius: 12px;
+    background: #f8fbfb;
+}
+
+#pageContent .pharmacy-logo-frame {
+    width: 76px;
+    height: 76px;
+    flex-shrink: 0;
+    border-radius: 16px;
+    background: #079B89;
+    border: 1px solid #d5e6e5;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#pageContent .pharmacy-logo-frame.has-custom-logo {
+    background: #ffffff;
+    padding: 5px;
+}
+
+#pageContent .pharmacy-logo-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+#pageContent .pharmacy-logo-frame.has-custom-logo img {
+    object-fit: contain;
+}
+
+#pageContent .pharmacy-brand-preview-text {
+    flex: 1 1 200px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#pageContent .preview-badge {
+    display: inline-block;
+    width: fit-content;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.9px;
+    color: #0f766e;
+    background: #e0f2f1;
+    padding: 3px 8px;
+    border-radius: 999px;
+}
+
+#pageContent .pharmacy-brand-preview-text strong {
+    font-size: 18px;
+    color: #172b4d;
+    word-break: break-word;
+}
+
+#pageContent .pharmacy-brand-preview-text small {
+    font-size: 12px;
+    color: #64748b;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+#pageContent .pharmacy-logo-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+#pageContent .pharmacy-logo-buttons {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+#pageContent .logo-upload-label {
+    margin: 0;
+}
+
+#pageContent .secondary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#pageContent .logo-hint {
+    font-size: 11px;
+    color: #64748b;
+}
+
+#pageContent .settings-subsection {
+    padding-top: 18px;
+    margin-top: 4px;
+    margin-bottom: 22px;
+    border-top: 1px solid #e7eef2;
+}
+
+#pageContent .settings-subsection-header {
+    margin-bottom: 16px;
+}
+
+#pageContent .settings-subsection-header h3 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    color: #172b4d;
+}
+
+#pageContent .settings-subsection-header p {
+    margin: 0;
+    font-size: 12px;
+    color: #64748b;
+}
+
+#pageContent .address-preview-box {
+    padding: 12px 14px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 9px;
+    background: #f8fafc;
+}
+
+#pageContent .address-preview-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #64748b;
+    margin-bottom: 4px;
+}
+
+#pageContent .address-preview-box p {
+    margin: 0;
+    font-size: 13px;
+    color: #1e293b;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+#pageContent .settings-actions-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+}
+
+#pageContent .settings-inline-status {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+#pageContent #settingsMessage {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+@media (max-width: 650px) {
+    #pageContent .settings-panel {
+        padding: 18px;
+    }
+
+    #pageContent .settings-form-grid {
+        grid-template-columns: 1fr;
+    }
+
+    #pageContent .settings-panel .form-group.form-group-full {
+        grid-column: 1;
+    }
+
+    #pageContent .pharmacy-logo-actions {
+        width: 100%;
+        align-items: flex-start;
+    }
+}
