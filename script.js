@@ -1,17 +1,105 @@
 "use strict";
 
 // ========================================
-// E-PHARMA LOGIN SYSTEM
+// E-PHARMA LOGIN SYSTEM (ADMIN & CASHIER)
 // File: script.js
 // ========================================
 
-// GET HTML ELEMENTS
 const loginForm = document.getElementById("loginForm");
 const usernameInput = document.getElementById("username");
 const passwordInput = document.getElementById("password");
 const togglePassword = document.getElementById("togglePassword");
 const message = document.getElementById("message");
 const forgotPassword = document.getElementById("forgotPassword");
+
+const roleTabAdmin = document.getElementById("roleTabAdmin");
+const roleTabCashier = document.getElementById("roleTabCashier");
+const loginBtnLabel = document.getElementById("loginBtnLabel");
+const demoRoleHint = document.getElementById("demoRoleHint");
+const fillAdminDemo = document.getElementById("fillAdminDemo");
+const fillCashierDemo = document.getElementById("fillCashierDemo");
+
+const ACCOUNTS = {
+    admin: {
+        username: "admin",
+        password: "Admin123!",
+        role: "admin",
+        label: "Admin"
+    },
+    cashier: {
+        username: "cashier",
+        password: "Cashier123!",
+        role: "cashier",
+        label: "Cashier"
+    }
+};
+
+let selectedRole = "admin";
+
+function selectRole(role) {
+    selectedRole = role === "cashier" ? "cashier" : "admin";
+
+    if (roleTabAdmin) {
+        const isAdmin = selectedRole === "admin";
+        roleTabAdmin.classList.toggle("active", isAdmin);
+        roleTabAdmin.setAttribute("aria-selected", String(isAdmin));
+    }
+    if (roleTabCashier) {
+        const isCashier = selectedRole === "cashier";
+        roleTabCashier.classList.toggle("active", isCashier);
+        roleTabCashier.setAttribute("aria-selected", String(isCashier));
+    }
+
+    if (usernameInput) {
+        usernameInput.placeholder = selectedRole === "cashier"
+            ? "Enter cashier username"
+            : "Enter admin username";
+    }
+    if (loginBtnLabel) {
+        loginBtnLabel.textContent = selectedRole === "cashier"
+            ? "Login to Cashier POS"
+            : "Login as Admin";
+    }
+    if (demoRoleHint) {
+        demoRoleHint.textContent = selectedRole === "cashier"
+            ? "Cashier: cashier / Cashier123!"
+            : "Admin: admin / Admin123!";
+    }
+}
+
+if (roleTabAdmin) {
+    roleTabAdmin.addEventListener("click", function () {
+        selectRole("admin");
+        clearMessage();
+    });
+}
+
+if (roleTabCashier) {
+    roleTabCashier.addEventListener("click", function () {
+        selectRole("cashier");
+        clearMessage();
+    });
+}
+
+if (fillAdminDemo) {
+    fillAdminDemo.addEventListener("click", function () {
+        selectRole("admin");
+        usernameInput.value = ACCOUNTS.admin.username;
+        passwordInput.value = ACCOUNTS.admin.password;
+        clearMessage();
+        usernameInput.focus();
+    });
+}
+
+if (fillCashierDemo) {
+    fillCashierDemo.addEventListener("click", function () {
+        selectRole("cashier");
+        usernameInput.value = ACCOUNTS.cashier.username;
+        passwordInput.value = ACCOUNTS.cashier.password;
+        clearMessage();
+        usernameInput.focus();
+    });
+}
 
 // ========================================
 // SHOW / HIDE PASSWORD
@@ -45,8 +133,7 @@ function clearMessage() {
 }
 
 // ========================================
-// LOGIN VALIDATION
-// DEMO LOGIN ONLY
+// LOGIN VALIDATION (ADMIN & CASHIER)
 // ========================================
 
 loginForm.addEventListener("submit", function (event) {
@@ -55,7 +142,6 @@ loginForm.addEventListener("submit", function (event) {
     const username = usernameInput.value.trim();
     const password = passwordInput.value;
 
-    // CHECK EMPTY FIELDS
     if (username === "" || password.trim() === "") {
         showMessage(
             "Please enter your username and password.",
@@ -64,24 +150,44 @@ loginForm.addEventListener("submit", function (event) {
         return;
     }
 
-    // DEMO CREDENTIALS
-    // Replace with backend authentication before production.
-    const validUsername = "admin";
-    const validPassword = "Admin123!";
+    const matchedAccount = Object.values(ACCOUNTS).find(
+        account => account.username === username && account.password === password
+    );
 
-    // CHECK USERNAME AND PASSWORD
-    if (
-        username === validUsername &&
-        password === validPassword
-    ) {
-        showMessage("Login successful! Opening dashboard...", "success");
+    if (matchedAccount) {
+        selectRole(matchedAccount.role);
 
-        // REDIRECT TO DASHBOARD
-        window.location.href = "dashboard.html";
+        if (window.EPharmaBranding && typeof window.EPharmaBranding.setActiveSession === "function") {
+            window.EPharmaBranding.setActiveSession({
+                role: matchedAccount.role,
+                username: matchedAccount.username
+            });
+        } else {
+            try {
+                const sessionPayload = JSON.stringify({
+                    role: matchedAccount.role,
+                    username: matchedAccount.username
+                });
+                sessionStorage.setItem("epharmaSession", sessionPayload);
+                localStorage.setItem("epharmaSession", sessionPayload);
+            } catch {
+                // Ignore storage errors.
+            }
+        }
 
+        showMessage(
+            matchedAccount.role === "cashier"
+                ? "Login successful! Opening Cashier POS..."
+                : "Login successful! Opening Admin Dashboard...",
+            "success"
+        );
+
+        window.location.href = matchedAccount.role === "cashier"
+            ? "dashboard.html#sales"
+            : "dashboard.html";
     } else {
         showMessage(
-            "Invalid username or password. Please try again.",
+            "Invalid username or password. Use Admin (admin / Admin123!) or Cashier (cashier / Cashier123!).",
             "error"
         );
     }
@@ -95,7 +201,7 @@ forgotPassword.addEventListener("click", function (event) {
     event.preventDefault();
 
     showMessage(
-        "Please contact your system administrator to reset your password.",
+        "Demo accounts: Admin (admin / Admin123!) or Cashier (cashier / Cashier123!).",
         "error"
     );
 });
@@ -106,8 +212,3 @@ forgotPassword.addEventListener("click", function (event) {
 
 usernameInput.addEventListener("input", clearMessage);
 passwordInput.addEventListener("input", clearMessage);
-
-// ========================================
-// PREVENT FORM FROM RELOADING UNEXPECTEDLY
-// Native HTML required validation is enabled.
-// ========================================

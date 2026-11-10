@@ -29,6 +29,109 @@ const dashboardHomeContent = pageContent
 
 const navLinks = document.querySelectorAll(".nav-link");
 
+let isDemoDatabaseMode = false;
+let pendingSaleMedicineId = null;
+
+const ROLE_ALLOWED_PAGES = {
+    admin: [
+        "dashboard",
+        "inventory",
+        "sales",
+        "purchase",
+        "suppliers",
+        "expiration",
+        "settings"
+    ],
+    cashier: [
+        "sales",
+        "inventory",
+        "expiration"
+    ]
+};
+
+function getCurrentSession() {
+    if (window.EPharmaBranding && typeof window.EPharmaBranding.getActiveSession === "function") {
+        return window.EPharmaBranding.getActiveSession();
+    }
+    try {
+        const raw = sessionStorage.getItem("epharmaSession") || localStorage.getItem("epharmaSession");
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && (parsed.role === "cashier" || parsed.role === "admin")) {
+                return parsed;
+            }
+        }
+    } catch {
+        // Ignore storage errors.
+    }
+    return { role: "admin", username: "admin" };
+}
+
+function getCurrentRole() {
+    return getCurrentSession().role === "cashier" ? "cashier" : "admin";
+}
+
+function isCashierRole() {
+    return getCurrentRole() === "cashier";
+}
+
+function getCurrentDisplayName() {
+    const branding = window.EPharmaBranding;
+    const settings = branding ? branding.getCachedSettings() : {};
+    if (isCashierRole()) {
+        return settings.cashierName || "Cashier";
+    }
+    return settings.adminName || "Admin";
+}
+
+function canAccessPage(pageName) {
+    const allowed = ROLE_ALLOWED_PAGES[getCurrentRole()] || ROLE_ALLOWED_PAGES.admin;
+    return allowed.includes(pageName);
+}
+
+function applyRoleAccessControl() {
+    const role = getCurrentRole();
+    const menuLabel = document.getElementById("sidebarMenuLabel");
+    if (menuLabel) {
+        menuLabel.textContent = role === "cashier" ? "CASHIER POS MENU" : "ADMIN MENU";
+    }
+
+    navLinks.forEach(function (link) {
+        const rolesAttr = (link.dataset.roles || "admin").split(",").map(s => s.trim());
+        const allowed = rolesAttr.includes(role);
+        link.hidden = !allowed;
+        if (!allowed) {
+            link.setAttribute("aria-hidden", "true");
+            link.tabIndex = -1;
+        } else {
+            link.removeAttribute("aria-hidden");
+            link.removeAttribute("tabindex");
+        }
+    });
+
+    if (window.EPharmaBranding && typeof window.EPharmaBranding.applyBranding === "function") {
+        window.EPharmaBranding.applyBranding();
+    }
+}
+
+function normalizeDiscountPercent(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return 0;
+    if (numeric > 100) return 100;
+    return Math.round(numeric * 100) / 100;
+}
+
+function calculateDiscountedPrice(unitPrice, discountPercent) {
+    const base = Number(unitPrice);
+    if (!Number.isFinite(base) || base <= 0) return 0;
+    const discount = normalizeDiscountPercent(discountPercent);
+    return Math.max(0, Math.round(base * (1 - discount / 100) * 100) / 100);
+}
+
+function isServerDbUnavailable(response, payload) {
+    return (response && response.status === 503) || Boolean(payload && payload.dbUnavailable);
+}
+
 
 // =========================================
 // 2. DASHBOARD DATE
@@ -145,43 +248,47 @@ if (globalSearch) {
         searchDashboardTables(query);
 
         const inventorySearch = document.getElementById("invSearch");
-
         if (inventorySearch) {
             inventorySearch.value = globalSearch.value;
             renderInventory();
+        }
+
+        const salesSearch = document.getElementById("salesSearch");
+        if (salesSearch) {
+            salesSearch.value = globalSearch.value;
+            renderSalesRecords();
+        }
+
+        const supplierSearch = document.getElementById("supplierSearch");
+        if (supplierSearch) {
+            supplierSearch.value = globalSearch.value;
+            renderSuppliers();
+        }
+
+        const expirationSearch = document.getElementById("expirationSearch");
+        if (expirationSearch) {
+            expirationSearch.value = globalSearch.value;
+            renderExpirationMedicines();
         }
     });
 }
 
 
 // =========================================
-// 6. NOTIFICATIONS
-// =========================================
-
-if (notificationButton) {
-    notificationButton.addEventListener("click", function () {
-        const brandName = (window.EPharmaBranding
-            ? window.EPharmaBranding.getCachedSettings().pharmacyName
-            : "E-Pharma").toUpperCase();
-        alert(
-            brandName + " NOTIFICATIONS\n\n" +
-            "• Check medicines with low stock.\n" +
-            "• Review medicines nearing expiration.\n\n" +
-            "Sample notifications only."
-        );
-    });
-}
-
-
-// =========================================
-// 7. LOGOUT
+// 7. LOGOUT / SWITCH ACCOUNT
 // =========================================
 
 if (logoutButton) {
     logoutButton.addEventListener("click", function () {
-        const confirmed = confirm("Are you sure you want to log out?");
+        const roleLabel = isCashierRole() ? "Cashier" : "Admin";
+        const confirmed = confirm(
+            `Log out from ${roleLabel} session and return to login?`
+        );
 
         if (confirmed) {
+            if (window.EPharmaBranding && typeof window.EPharmaBranding.clearActiveSession === "function") {
+                window.EPharmaBranding.clearActiveSession();
+            }
             window.location.href = "index.html";
         }
     });
@@ -201,10 +308,14 @@ const pageTemplates = {
                 <p class="breadcrumb">Main Menu / Inventory</p>
                 <h1>Medicine Inventory</h1>
                 <p class="subtitle">
-                    Manage medicine stock, types, prices, and reorder levels.
+                    Manage medicine stock, pricing, discounts, and reorder thresholds.
                 </p>
             </div>
         </section>
+
+        <div class="role-notice-banner" id="cashierInventoryNotice" hidden>
+            <span>Cashier View: You can search stock levels, check discounts, and click <strong>Sell</strong> to open a medicine in POS.</span>
+        </div>
 
         <section class="inventory-summary">
 
@@ -221,6 +332,11 @@ const pageTemplates = {
             <article class="inventory-summary-card">
                 <p>Total Units in Stock</p>
                 <h3 id="invTotalUnits">0</h3>
+            </article>
+
+            <article class="inventory-summary-card">
+                <p>Discounted Items</p>
+                <h3 id="invDiscounted">0</h3>
             </article>
 
         </section>
@@ -243,6 +359,7 @@ const pageTemplates = {
                         <option value="low">Low Stock</option>
                         <option value="in">In Stock</option>
                         <option value="out">Out of Stock</option>
+                        <option value="discounted">With Discount</option>
                     </select>
 
                     <button type="button"
@@ -260,8 +377,10 @@ const pageTemplates = {
                     <thead>
                         <tr>
                             <th>Medicine Name</th>
-                            <th>Category / Type</th>
-                            <th>Price</th>
+                            <th>Category</th>
+                            <th>Unit Price</th>
+                            <th>Discount</th>
+                            <th>Final Price</th>
                             <th>Quantity</th>
                             <th>Reorder Level</th>
                             <th>Status</th>
@@ -286,7 +405,7 @@ const pageTemplates = {
             <div class="panel-heading">
                 <div>
                     <h3 id="medicineFormTitle">Add New Medicine</h3>
-                    <p>Enter the medicine details below.</p>
+                    <p>Enter medicine pricing, stock level, and optional discount.</p>
                 </div>
             </div>
 
@@ -297,6 +416,7 @@ const pageTemplates = {
                 <div class="form-field">
                     <label for="medicineName">Medicine Name *</label>
                     <input id="medicineName"
+                           placeholder="e.g., Paracetamol 500mg"
                            required
                            maxlength="120">
                 </div>
@@ -320,7 +440,24 @@ const pageTemplates = {
                            id="medicinePrice"
                            min="0.01"
                            step="0.01"
+                           placeholder="0.00"
                            required>
+                </div>
+
+                <div class="form-field">
+                    <label for="medicineDiscount">Discount (%)</label>
+                    <input type="number"
+                           id="medicineDiscount"
+                           min="0"
+                           max="100"
+                           step="0.01"
+                           value="0">
+                    <div class="discount-presets" id="medicineDiscountPresets">
+                        <button type="button" class="discount-chip" data-discount="0">0%</button>
+                        <button type="button" class="discount-chip" data-discount="5">5%</button>
+                        <button type="button" class="discount-chip" data-discount="10">10%</button>
+                        <button type="button" class="discount-chip" data-discount="20">20% Senior/PWD</button>
+                    </div>
                 </div>
 
                 <div class="form-field">
@@ -329,6 +466,7 @@ const pageTemplates = {
                            id="medicineQuantity"
                            min="0"
                            step="1"
+                           placeholder="0"
                            required>
                 </div>
 
@@ -338,7 +476,15 @@ const pageTemplates = {
                            id="medicineReorder"
                            min="0"
                            step="1"
+                           placeholder="10"
                            required>
+                </div>
+
+                <div class="form-field form-full">
+                    <div class="price-preview-banner" id="medicinePricePreviewBanner">
+                        <span>Final Selling Price Preview</span>
+                        <strong id="medicineFinalPricePreview">₱0.00</strong>
+                    </div>
                 </div>
 
                 <div class="form-buttons">
@@ -359,13 +505,13 @@ const pageTemplates = {
         </section>
     `,
 
-   
+
 sales: `
     <section class="page-heading">
         <div>
-            <p class="breadcrumb">Main Menu / Sales</p>
-            <h1>Sales Management</h1>
-            <p class="subtitle">Process medicine sales and manage transaction records.</p>
+            <p class="breadcrumb">Point of Sale / Sales</p>
+            <h1 id="salesPageTitle">Sales & Point of Sale</h1>
+            <p class="subtitle">Process customer purchases, apply discounts, calculate change, and view receipts.</p>
         </div>
     </section>
 
@@ -375,11 +521,11 @@ sales: `
             <h3 id="salesTodayTotal">₱0.00</h3>
         </article>
         <article class="inventory-summary-card">
-            <p>Transactions</p>
+            <p>Transactions Today</p>
             <h3 id="salesTransactionCount">0</h3>
         </article>
         <article class="inventory-summary-card">
-            <p>Medicines Sold</p>
+            <p>Units Sold Today</p>
             <h3 id="salesItemsSold">0</h3>
         </article>
     </section>
@@ -387,8 +533,8 @@ sales: `
     <section class="panel">
         <div class="panel-heading">
             <div>
-                <h3>New Sale</h3>
-                <p>Select a medicine and enter the quantity.</p>
+                <h3>New POS Transaction</h3>
+                <p>Select a medicine, confirm discount, and enter payment details.</p>
             </div>
         </div>
 
@@ -408,13 +554,43 @@ sales: `
             </div>
 
             <div class="form-field">
-                <label for="salesUnitPrice">Unit Price</label>
+                <label for="salesOriginalPrice">Original Unit Price</label>
+                <input type="text" id="salesOriginalPrice"
+                       value="₱0.00" readonly>
+            </div>
+
+            <div class="form-field">
+                <label for="salesDiscount">Discount (%)</label>
+                <input type="number" id="salesDiscount"
+                       min="0" max="100" step="0.01" value="0">
+                <div class="discount-presets" id="salesDiscountPresets">
+                    <button type="button" class="discount-chip" data-discount="inventory">Inventory Default</button>
+                    <button type="button" class="discount-chip" data-discount="0">0%</button>
+                    <button type="button" class="discount-chip" data-discount="10">10%</button>
+                    <button type="button" class="discount-chip" data-discount="20">20% Senior/PWD</button>
+                </div>
+            </div>
+
+            <div class="form-field">
+                <label for="salesUnitPrice">Final Unit Price</label>
                 <input type="text" id="salesUnitPrice"
                        value="₱0.00" readonly>
             </div>
 
-            <div class="form-field form-full">
-                <label for="salesTotal">Total Amount</label>
+            <div class="form-field">
+                <label for="salesCashReceived">Cash Tendered (₱)</label>
+                <input type="number" id="salesCashReceived"
+                       min="0" step="0.01" placeholder="Optional cash amount">
+            </div>
+
+            <div class="form-field">
+                <label for="salesChange">Change</label>
+                <input type="text" id="salesChange"
+                       value="₱0.00" readonly>
+            </div>
+
+            <div class="form-field form-full sales-highlight-total">
+                <label for="salesTotal">Total Amount Due</label>
                 <input type="text" id="salesTotal"
                        value="₱0.00" readonly>
             </div>
@@ -432,20 +608,36 @@ sales: `
         </form>
 
         <p id="salesMessage" class="inventory-message" role="status"></p>
+
+        <div class="pos-receipt-card" id="posReceiptCard" hidden>
+            <div class="pos-receipt-header">
+                <div class="pos-receipt-brand">
+                    <img id="receiptPharmacyLogo" src="assets/default-logo.svg" alt="Pharmacy Logo">
+                    <div>
+                        <strong id="receiptPharmacyName">E-Pharma</strong>
+                        <small id="receiptPharmacyAddress">Philippines</small>
+                    </div>
+                </div>
+                <button type="button" class="inventory-button secondary" id="printReceiptBtn">
+                    Print Receipt
+                </button>
+            </div>
+            <div class="pos-receipt-grid" id="posReceiptDetails"></div>
+        </div>
     </section>
 
     <section class="panel">
         <div class="panel-heading">
             <div>
                 <h3>Sales Records</h3>
-                <p>Completed transactions in this demo session.</p>
+                <p>Recent pharmacy transactions with applied discounts and cashier details.</p>
             </div>
         </div>
 
         <div class="inventory-toolbar">
             <input type="search" id="salesSearch"
                    class="inventory-search"
-                   placeholder="Search receipt or medicine..."
+                   placeholder="Search receipt, medicine, or cashier..."
                    aria-label="Search sales records">
         </div>
 
@@ -455,9 +647,11 @@ sales: `
                     <tr>
                         <th>Receipt No.</th>
                         <th>Date & Time</th>
+                        <th>Cashier</th>
                         <th>Medicine</th>
                         <th>Quantity</th>
                         <th>Unit Price</th>
+                        <th>Discount</th>
                         <th>Total</th>
                     </tr>
                 </thead>
@@ -570,8 +764,6 @@ purchase: `
             <table class="inventory-table">
                 <thead>
                     <tr>
-                        <th>Status</th>
-                        <th>Actions</th>
                         <th>Purchase No.</th>
                         <th>Date</th>
                         <th>Medicine</th>
@@ -579,6 +771,8 @@ purchase: `
                         <th>Quantity</th>
                         <th>Unit Cost</th>
                         <th>Total Cost</th>
+                        <th>Status</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="purchaseRecordsBody"></tbody>
@@ -587,12 +781,13 @@ purchase: `
     </section>
 `,
 
-   
+
 suppliers: `
     <section class="page-heading">
         <div>
+            <p class="breadcrumb">Main Menu / Suppliers</p>
             <h1>Suppliers Management</h1>
-            <p>Manage your pharmacy suppliers and contact information.</p>
+            <p class="subtitle">Manage your pharmacy suppliers and contact information.</p>
         </div>
         <button class="primary-btn" id="addSupplierBtn">+ Add Supplier</button>
     </section>
@@ -690,8 +885,9 @@ suppliers: `
 expiration: `
     <section class="page-heading">
         <div>
+            <p class="breadcrumb">Main Menu / Expiration</p>
             <h1>Expiration Monitoring</h1>
-            <p>Monitor expired and soon-to-expire medicines.</p>
+            <p class="subtitle">Monitor expired and soon-to-expire medicine batches.</p>
         </div>
     </section>
 
@@ -763,8 +959,9 @@ expiration: `
 settings: `
     <section class="page-heading">
         <div>
+            <p class="breadcrumb">Main Menu / Settings</p>
             <h1>Settings</h1>
-            <p>Manage your pharmacy information and system preferences.</p>
+            <p class="subtitle">Manage your pharmacy branding, staff profiles, and system preferences.</p>
         </div>
     </section>
 
@@ -928,28 +1125,34 @@ settings: `
             <div class="settings-heading">
                 <div class="settings-icon">👤</div>
                 <div>
-                    <h2>Administrator Profile</h2>
-                    <p>Update the displayed administrator details.</p>
+                    <h2>Staff & Role Profiles</h2>
+                    <p>Update the displayed Administrator and Cashier names across the system.</p>
                 </div>
             </div>
 
             <form id="adminSettingsForm">
                 <div class="settings-form-grid">
                     <div class="form-group">
-                        <label for="settingAdminName">Full Name</label>
+                        <label for="settingAdminName">Administrator Name</label>
                         <input id="settingAdminName" type="text"
                             value="Admin" required>
                     </div>
 
                     <div class="form-group">
-                        <label for="settingAdminEmail">Email Address</label>
+                        <label for="settingAdminEmail">Administrator Email</label>
                         <input id="settingAdminEmail" type="email"
                             value="admin@example.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="settingCashierName">Default Cashier Display Name</label>
+                        <input id="settingCashierName" type="text"
+                            value="Cashier" maxlength="120" required>
                     </div>
                 </div>
 
                 <button type="submit" class="primary-btn">
-                    Save Administrator Profile
+                    Save Staff Profiles
                 </button>
             </form>
         </div>
@@ -1003,6 +1206,10 @@ function showPage(pageName) {
 
     if (!pageContent) return;
 
+    if (!canAccessPage(pageName)) {
+        pageName = isCashierRole() ? "sales" : "dashboard";
+    }
+
     if (pageName === "dashboard") {
 
         // Restore the original complete dashboard.
@@ -1031,9 +1238,18 @@ function showPage(pageName) {
         }
     });
 
+    if (window.location.hash !== "#" + pageName && window.history && typeof window.history.replaceState === "function") {
+        try {
+            window.history.replaceState(null, "", "#" + pageName);
+        } catch {
+            // Ignore hash update errors in restricted environments.
+        }
+    }
+
     // Initialize the selected page.
     if (pageName === "dashboard") {
         initializeDashboard();
+        refreshDashboardStats();
     }
 
     if (pageName === "inventory") {
@@ -1041,20 +1257,20 @@ function showPage(pageName) {
     }
 
     if (pageName === "sales") {
-    initializeSalesPage();
-}
-if (pageName === "purchase") {
-    initializePurchasePage();
-}
-if (pageName === "suppliers") {
-    initializeSuppliersPage();
-}
-if (pageName === "expiration") {
-    initializeExpirationPage();
-}
-if (pageName === "settings") {
-    initializeSettingsPage();
-}
+        initializeSalesPage();
+    }
+    if (pageName === "purchase") {
+        initializePurchasePage();
+    }
+    if (pageName === "suppliers") {
+        initializeSuppliersPage();
+    }
+    if (pageName === "expiration") {
+        initializeExpirationPage();
+    }
+    if (pageName === "settings") {
+        initializeSettingsPage();
+    }
 
     // Close mobile sidebar after selecting a page.
     if (sidebar) {
@@ -1092,8 +1308,10 @@ document.addEventListener("click", function (event) {
 
 
 // =========================================
-// 11. INVENTORY SAMPLE DATA
+// 11. INVENTORY SAMPLE DATA (DEMO FALLBACK)
 // =========================================
+
+let pendingPurchaseMedicineId = null;
 
 let inventoryMedicines = [
     {
@@ -1101,6 +1319,7 @@ let inventoryMedicines = [
         name: "Paracetamol 500mg",
         category: "Pain Reliever",
         price: 5,
+        discount: 0,
         quantity: 5,
         reorderLevel: 20
     },
@@ -1109,6 +1328,7 @@ let inventoryMedicines = [
         name: "Amoxicillin 500mg",
         category: "Antibiotic",
         price: 8,
+        discount: 0,
         quantity: 50,
         reorderLevel: 20
     },
@@ -1117,6 +1337,7 @@ let inventoryMedicines = [
         name: "Cetirizine 10mg",
         category: "Antihistamine",
         price: 12,
+        discount: 10,
         quantity: 10,
         reorderLevel: 15
     },
@@ -1125,6 +1346,7 @@ let inventoryMedicines = [
         name: "Ibuprofen 400mg",
         category: "Pain Reliever",
         price: 9,
+        discount: 0,
         quantity: 6,
         reorderLevel: 20
     },
@@ -1133,6 +1355,7 @@ let inventoryMedicines = [
         name: "Vitamin C 500mg",
         category: "Vitamins",
         price: 4,
+        discount: 20,
         quantity: 100,
         reorderLevel: 30
     }
@@ -1168,8 +1391,14 @@ function renderInventory() {
 
     if (!searchInput || !filterInput) return;
 
+    const cashierMode = isCashierRole();
     const query = searchInput.value.trim().toLowerCase();
     const filter = filterInput.value;
+
+    const addBtn = document.getElementById("addMedicineBtn");
+    const cashierNotice = document.getElementById("cashierInventoryNotice");
+    if (addBtn) addBtn.hidden = cashierMode;
+    if (cashierNotice) cashierNotice.hidden = !cashierMode;
 
     const filteredMedicines = inventoryMedicines.filter(function (medicine) {
         const matchesSearch =
@@ -1177,9 +1406,11 @@ function renderInventory() {
             medicine.category.toLowerCase().includes(query);
 
         const status = getMedicineStatus(medicine);
+        const discount = normalizeDiscountPercent(medicine.discount);
 
         const matchesFilter =
-            filter === "all" || filter === status;
+            filter === "all" ||
+            (filter === "discounted" ? discount > 0 : filter === status);
 
         return matchesSearch && matchesFilter;
     });
@@ -1197,13 +1428,20 @@ function renderInventory() {
             return sum + medicine.quantity;
         }, 0);
 
+    const invDiscountedEl = document.getElementById("invDiscounted");
+    if (invDiscountedEl) {
+        invDiscountedEl.textContent = inventoryMedicines.filter(function (medicine) {
+            return normalizeDiscountPercent(medicine.discount) > 0;
+        }).length;
+    }
+
     tbody.innerHTML = "";
 
     if (filteredMedicines.length === 0) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
 
-        cell.colSpan = 7;
+        cell.colSpan = 9;
         cell.className = "inventory-empty";
         cell.textContent = "No medicines found.";
 
@@ -1215,6 +1453,8 @@ function renderInventory() {
 
     filteredMedicines.forEach(function (medicine) {
         const status = getMedicineStatus(medicine);
+        const discount = normalizeDiscountPercent(medicine.discount);
+        const finalPrice = calculateDiscountedPrice(medicine.price, discount);
 
         const statusLabels = {
             low: "Low Stock",
@@ -1230,19 +1470,57 @@ function renderInventory() {
 
         const row = document.createElement("tr");
 
-        const values = [
-            medicine.name,
-            medicine.category,
-            "₱" + medicine.price.toFixed(2),
-            String(medicine.quantity),
-            String(medicine.reorderLevel)
-        ];
+        const nameCell = document.createElement("td");
+        const nameStrong = document.createElement("strong");
+        nameStrong.textContent = medicine.name;
+        nameCell.appendChild(nameStrong);
+        row.appendChild(nameCell);
 
-        values.forEach(function (value) {
-            const cell = document.createElement("td");
-            cell.textContent = value;
-            row.appendChild(cell);
-        });
+        const categoryCell = document.createElement("td");
+        categoryCell.textContent = medicine.category || "-";
+        row.appendChild(categoryCell);
+
+        const priceCell = document.createElement("td");
+        if (discount > 0) {
+            const strikeSpan = document.createElement("span");
+            strikeSpan.className = "price-strike";
+            strikeSpan.textContent = "₱" + medicine.price.toFixed(2);
+            priceCell.appendChild(strikeSpan);
+        } else {
+            priceCell.textContent = "₱" + medicine.price.toFixed(2);
+        }
+        row.appendChild(priceCell);
+
+        const discountCell = document.createElement("td");
+        const discountBadge = document.createElement("span");
+        if (discount > 0) {
+            discountBadge.className = "badge discount";
+            discountBadge.textContent = discount + "% OFF";
+        } else {
+            discountBadge.className = "badge neutral";
+            discountBadge.textContent = "None";
+        }
+        discountCell.appendChild(discountBadge);
+        row.appendChild(discountCell);
+
+        const finalPriceCell = document.createElement("td");
+        if (discount > 0) {
+            const finalSpan = document.createElement("span");
+            finalSpan.className = "price-final";
+            finalSpan.textContent = "₱" + finalPrice.toFixed(2);
+            finalPriceCell.appendChild(finalSpan);
+        } else {
+            finalPriceCell.textContent = "₱" + finalPrice.toFixed(2);
+        }
+        row.appendChild(finalPriceCell);
+
+        const qtyCell = document.createElement("td");
+        qtyCell.textContent = String(medicine.quantity);
+        row.appendChild(qtyCell);
+
+        const reorderCell = document.createElement("td");
+        reorderCell.textContent = String(medicine.reorderLevel);
+        row.appendChild(reorderCell);
 
         // Stock status.
         const statusCell = document.createElement("td");
@@ -1254,44 +1532,55 @@ function renderInventory() {
         statusCell.appendChild(badge);
         row.appendChild(statusCell);
 
-        // Action buttons.
+        // Action buttons (Admin vs Cashier).
         const actionsCell = document.createElement("td");
         const actions = document.createElement("div");
 
         actions.className = "action-buttons";
 
-        const editButton = document.createElement("button");
-        editButton.type = "button";
-        editButton.textContent = "Edit";
+        if (cashierMode) {
+            const sellButton = document.createElement("button");
+            sellButton.type = "button";
+            sellButton.className = "sell-quick-button";
+            sellButton.textContent = status === "out" ? "Out of Stock" : "Sell";
+            sellButton.disabled = status === "out";
 
-        editButton.addEventListener("click", function () {
-            openMedicineForm(medicine.id);
-        });
+            sellButton.addEventListener("click", function () {
+                pendingSaleMedicineId = medicine.id;
+                showPage("sales");
+            });
 
-        const reorderButton = document.createElement("button");
-        reorderButton.type = "button";
-        reorderButton.textContent = "Reorder";
-        reorderButton.disabled = status === "in";
+            actions.appendChild(sellButton);
+        } else {
+            const editButton = document.createElement("button");
+            editButton.type = "button";
+            editButton.textContent = "Edit";
 
-        reorderButton.addEventListener("click", function () {
-            alert(
-                "Reorder request: " + medicine.name +
-                "\nCurrent stock: " + medicine.quantity +
-                "\nReorder level: " + medicine.reorderLevel +
-                "\n\nSupplier order tracking is not connected yet."
-            );
-        });
+            editButton.addEventListener("click", function () {
+                openMedicineForm(medicine.id);
+            });
 
-        const deleteButton = document.createElement("button");
-        deleteButton.type = "button";
-        deleteButton.textContent = "Delete";
-        deleteButton.className = "delete-button";
+            const reorderButton = document.createElement("button");
+            reorderButton.type = "button";
+            reorderButton.textContent = "Reorder";
+            reorderButton.disabled = status === "in";
 
-        deleteButton.addEventListener("click", function () {
-            deleteMedicine(medicine.id);
-        });
+            reorderButton.addEventListener("click", function () {
+                pendingPurchaseMedicineId = medicine.id;
+                showPage("purchase");
+            });
 
-        actions.append(editButton, reorderButton, deleteButton);
+            const deleteButton = document.createElement("button");
+            deleteButton.type = "button";
+            deleteButton.textContent = "Delete";
+            deleteButton.className = "delete-button";
+
+            deleteButton.addEventListener("click", function () {
+                deleteMedicine(medicine.id);
+            });
+
+            actions.append(editButton, reorderButton, deleteButton);
+        }
 
         actionsCell.appendChild(actions);
         row.appendChild(actionsCell);
@@ -1305,7 +1594,38 @@ function renderInventory() {
 // 14. ADD / EDIT MEDICINE FORM
 // =========================================
 
+function updateMedicineFormPricePreview() {
+    const priceInput = document.getElementById("medicinePrice");
+    const discountInput = document.getElementById("medicineDiscount");
+    const previewEl = document.getElementById("medicineFinalPricePreview");
+    if (!previewEl) return;
+
+    const basePrice = Number(priceInput ? priceInput.value : 0);
+    const discount = normalizeDiscountPercent(discountInput ? discountInput.value : 0);
+
+    if (!Number.isFinite(basePrice) || basePrice <= 0) {
+        previewEl.textContent = "₱0.00";
+        return;
+    }
+
+    const finalPrice = calculateDiscountedPrice(basePrice, discount);
+    const savings = Math.max(0, basePrice - finalPrice);
+
+    previewEl.textContent = discount > 0
+        ? `₱${finalPrice.toFixed(2)} (${discount}% off · Save ₱${savings.toFixed(2)})`
+        : `₱${finalPrice.toFixed(2)}`;
+
+    document.querySelectorAll("#medicineDiscountPresets .discount-chip").forEach(chip => {
+        chip.classList.toggle("active", Number(chip.dataset.discount) === discount);
+    });
+}
+
 function openMedicineForm(medicineId = null) {
+    if (isCashierRole()) {
+        showInventoryMessage("Only Admin can add or edit medicines.", true);
+        return;
+    }
+
     const form = document.getElementById("medicineForm");
     const panel = document.getElementById("medicineFormPanel");
 
@@ -1314,6 +1634,8 @@ function openMedicineForm(medicineId = null) {
     form.reset();
 
     document.getElementById("medicineId").value = "";
+    const discountField = document.getElementById("medicineDiscount");
+    if (discountField) discountField.value = "0";
 
     if (medicineId !== null) {
         const medicine = inventoryMedicines.find(function (item) {
@@ -1326,6 +1648,9 @@ function openMedicineForm(medicineId = null) {
         document.getElementById("medicineName").value = medicine.name;
         document.getElementById("medicineCategory").value = medicine.category;
         document.getElementById("medicinePrice").value = medicine.price;
+        if (discountField) {
+            discountField.value = normalizeDiscountPercent(medicine.discount);
+        }
         document.getElementById("medicineQuantity").value = medicine.quantity;
         document.getElementById("medicineReorder").value = medicine.reorderLevel;
 
@@ -1337,6 +1662,7 @@ function openMedicineForm(medicineId = null) {
             "Add New Medicine";
     }
 
+    updateMedicineFormPricePreview();
     panel.hidden = false;
 
     panel.scrollIntoView({
@@ -1354,6 +1680,11 @@ function openMedicineForm(medicineId = null) {
 
 
 async function deleteMedicine(id) {
+    if (isCashierRole()) {
+        showInventoryMessage("Only Admin can delete medicines.", true);
+        return;
+    }
+
     const medicine = inventoryMedicines.find(function (item) {
         return item.id === Number(id);
     });
@@ -1377,7 +1708,16 @@ async function deleteMedicine(id) {
             }
         );
 
-        const result = await response.json();
+        const result = await response.json().catch(() => ({}));
+
+        if (isServerDbUnavailable(response, result)) {
+            isDemoDatabaseMode = true;
+            inventoryMedicines = inventoryMedicines.filter(item => item.id !== Number(id));
+            renderInventory();
+            refreshDashboardStats();
+            showInventoryMessage(`${medicine.name} removed (Demo preview mode).`);
+            return;
+        }
 
         if (!response.ok) {
             throw new Error(
@@ -1393,8 +1733,9 @@ async function deleteMedicine(id) {
     } catch (error) {
         console.error("Delete medicine error:", error);
 
-        alert(
-            "Hindi na-delete ang medicine.\n\n" + error.message
+        showInventoryMessage(
+            error.message || "Unable to delete medicine.",
+            true
         );
     }
 }
@@ -1404,11 +1745,12 @@ async function deleteMedicine(id) {
 // 16. INVENTORY MESSAGE
 // =========================================
 
-function showInventoryMessage(text) {
+function showInventoryMessage(text, isError = false) {
     const message = document.getElementById("inventoryMessage");
 
     if (message) {
         message.textContent = text;
+        message.style.color = isError ? "#B91C1C" : "#067D70";
     }
 }
 
@@ -1425,10 +1767,12 @@ async function initializeInventoryPage() {
 
     form.dataset.initialized = "true";
 
-    document.getElementById("addMedicineBtn")
-        .addEventListener("click", function () {
+    const addBtn = document.getElementById("addMedicineBtn");
+    if (addBtn) {
+        addBtn.addEventListener("click", function () {
             openMedicineForm();
         });
+    }
 
     document.getElementById("cancelMedicineBtn")
         .addEventListener("click", function () {
@@ -1442,8 +1786,28 @@ async function initializeInventoryPage() {
     document.getElementById("invFilter")
         .addEventListener("change", renderInventory);
 
+    const priceInput = document.getElementById("medicinePrice");
+    const discountInput = document.getElementById("medicineDiscount");
+    const discountPresets = document.getElementById("medicineDiscountPresets");
+
+    if (priceInput) priceInput.addEventListener("input", updateMedicineFormPricePreview);
+    if (discountInput) discountInput.addEventListener("input", updateMedicineFormPricePreview);
+    if (discountPresets && discountInput) {
+        discountPresets.addEventListener("click", function (event) {
+            const chip = event.target.closest(".discount-chip");
+            if (!chip) return;
+            discountInput.value = chip.dataset.discount || "0";
+            updateMedicineFormPricePreview();
+        });
+    }
+
     form.addEventListener("submit", async function (event) {
         event.preventDefault();
+
+        if (isCashierRole()) {
+            showInventoryMessage("Only Admin can modify inventory.", true);
+            return;
+        }
 
         const idValue = document.getElementById("medicineId").value;
         const name = document.getElementById("medicineName").value.trim();
@@ -1452,6 +1816,9 @@ async function initializeInventoryPage() {
         const price = Number(
             document.getElementById("medicinePrice").value
         );
+
+        const rawDiscount = document.getElementById("medicineDiscount").value;
+        const discountNum = rawDiscount === "" ? 0 : Number(rawDiscount);
 
         const quantity = Number(
             document.getElementById("medicineQuantity").value
@@ -1466,14 +1833,19 @@ async function initializeInventoryPage() {
             !category ||
             !Number.isFinite(price) ||
             price <= 0 ||
+            !Number.isFinite(discountNum) ||
+            discountNum < 0 ||
+            discountNum > 100 ||
             !Number.isInteger(quantity) ||
             quantity < 0 ||
             !Number.isInteger(reorderLevel) ||
             reorderLevel < 0
         ) {
-            alert("Please enter valid medicine details.");
+            alert("Please enter valid medicine details (discount must be between 0% and 100%).");
             return;
         }
+
+        const discount = normalizeDiscountPercent(discountNum);
 
         const duplicate = inventoryMedicines.some(function (medicine) {
             return (
@@ -1491,6 +1863,7 @@ async function initializeInventoryPage() {
             medicine_name: name,
             category: category,
             price: price,
+            discount_percent: discount,
             quantity: quantity,
             reorder_level: reorderLevel
         };
@@ -1508,7 +1881,39 @@ async function initializeInventoryPage() {
                 body: JSON.stringify(payload)
             });
 
-            const result = await response.json();
+            const result = await response.json().catch(() => ({}));
+
+            if (isServerDbUnavailable(response, result)) {
+                isDemoDatabaseMode = true;
+                if (idValue) {
+                    const existing = inventoryMedicines.find(m => m.id === Number(idValue));
+                    if (existing) {
+                        existing.name = name;
+                        existing.category = category;
+                        existing.price = price;
+                        existing.discount = discount;
+                        existing.quantity = quantity;
+                        existing.reorderLevel = reorderLevel;
+                    }
+                } else {
+                    inventoryMedicines.push({
+                        id: nextMedicineId++,
+                        name,
+                        category,
+                        price,
+                        discount,
+                        quantity,
+                        reorderLevel
+                    });
+                }
+
+                document.getElementById("medicineFormPanel").hidden = true;
+                form.reset();
+                renderInventory();
+                refreshDashboardStats();
+                showInventoryMessage("Medicine saved in local preview mode (connect MySQL to persist in database).");
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(
@@ -1528,15 +1933,15 @@ async function initializeInventoryPage() {
             );
         } catch (error) {
             console.error("Save medicine error:", error);
-            alert(
-                "Hindi na-save ang medicine sa MySQL. " +
-                "Siguraduhing tumatakbo ang server.js at subukan ulit.\n\n" +
-                error.message
+            showInventoryMessage(
+                error.message || "Unable to save medicine.",
+                true
             );
         }
     });
 
     await loadMedicinesFromDatabase();
+    renderInventory();
 }
 
 
@@ -1557,6 +1962,52 @@ initializeDashboard();
 let salesRecords = [];
 let nextReceiptNumber = 1;
 
+function showSalesMessage(text, isError = false) {
+    const message = document.getElementById("salesMessage");
+    if (!message) return;
+    message.textContent = text;
+    message.style.color = isError ? "#B91C1C" : "#067D70";
+}
+
+function renderPosReceipt(receiptInfo) {
+    const card = document.getElementById("posReceiptCard");
+    const details = document.getElementById("posReceiptDetails");
+    if (!card || !details || !receiptInfo) return;
+
+    const branding = window.EPharmaBranding;
+    const settings = branding ? branding.getCachedSettings() : {};
+    const logoEl = document.getElementById("receiptPharmacyLogo");
+    const nameEl = document.getElementById("receiptPharmacyName");
+    const addrEl = document.getElementById("receiptPharmacyAddress");
+
+    if (logoEl) {
+        logoEl.src = settings.pharmacyLogo || (branding ? branding.DEFAULT_LOGO_PATH : "assets/default-logo.svg");
+    }
+    if (nameEl) {
+        nameEl.textContent = settings.pharmacyName || "E-Pharma";
+    }
+    if (addrEl) {
+        addrEl.textContent = (branding && branding.formatAddress(settings)) || settings.pharmacyAddress || "Philippines";
+    }
+
+    const changeRow = receiptInfo.cashTendered !== null
+        ? `<div><span>Cash Tendered</span><strong>₱${receiptInfo.cashTendered.toFixed(2)}</strong></div>
+           <div><span>Change</span><strong>₱${receiptInfo.changeAmount.toFixed(2)}</strong></div>`
+        : "";
+
+    details.innerHTML = `
+        <div><span>Receipt No.</span><strong>${escapeSupplierText(receiptInfo.receipt)}</strong></div>
+        <div><span>Date & Time</span><strong>${escapeSupplierText(receiptInfo.date)}</strong></div>
+        <div><span>Cashier</span><strong>${escapeSupplierText(receiptInfo.cashierName)}</strong></div>
+        <div><span>Medicine</span><strong>${escapeSupplierText(receiptInfo.medicineName)} × ${receiptInfo.quantity}</strong></div>
+        <div><span>Unit Price</span><strong>₱${receiptInfo.unitPrice.toFixed(2)}${receiptInfo.discount > 0 ? ` (${receiptInfo.discount}% OFF)` : ""}</strong></div>
+        <div><span>Total Paid</span><strong>₱${receiptInfo.total.toFixed(2)}</strong></div>
+        ${changeRow}
+    `;
+
+    card.hidden = false;
+}
+
 async function initializeSalesPage() {
     const form = document.getElementById("salesForm");
 
@@ -1564,27 +2015,62 @@ async function initializeSalesPage() {
 
     form.dataset.initialized = "true";
 
+    const titleEl = document.getElementById("salesPageTitle");
+    if (titleEl) {
+        titleEl.textContent = isCashierRole()
+            ? "Cashier Point of Sale"
+            : "Sales & Point of Sale";
+    }
+
     const medicineSelect = document.getElementById("salesMedicine");
     const quantityInput = document.getElementById("salesQuantity");
+    const discountInput = document.getElementById("salesDiscount");
+    const discountPresets = document.getElementById("salesDiscountPresets");
+    const cashInput = document.getElementById("salesCashReceived");
     const searchInput = document.getElementById("salesSearch");
-    const message = document.getElementById("salesMessage");
+    const printBtn = document.getElementById("printReceiptBtn");
 
     async function loadSalesMedicines() {
         await loadMedicinesFromDatabase();
 
+        const previousValue = medicineSelect.value;
         medicineSelect.innerHTML =
             '<option value="">Select medicine</option>';
 
         inventoryMedicines.forEach(function (medicine) {
             const option = document.createElement("option");
+            const discount = normalizeDiscountPercent(medicine.discount);
+            const finalPrice = calculateDiscountedPrice(medicine.price, discount);
 
             option.value = String(medicine.id);
             option.textContent =
-                medicine.name + " — ₱" + medicine.price.toFixed(2) +
-                " (Stock: " + medicine.quantity + ")";
+                medicine.name +
+                " — ₱" + finalPrice.toFixed(2) +
+                (discount > 0 ? " (" + discount + "% OFF)" : "") +
+                " · Stock: " + medicine.quantity;
 
             medicineSelect.appendChild(option);
         });
+
+        if (pendingSaleMedicineId !== null) {
+            medicineSelect.value = String(pendingSaleMedicineId);
+            pendingSaleMedicineId = null;
+            applyMedicineDefaultDiscount();
+            quantityInput.focus();
+        } else if (previousValue) {
+            medicineSelect.value = previousValue;
+        }
+    }
+
+    function applyMedicineDefaultDiscount() {
+        const medicine = inventoryMedicines.find(
+            item => item.id === Number(medicineSelect.value)
+        );
+        if (discountInput) {
+            discountInput.value = medicine
+                ? String(normalizeDiscountPercent(medicine.discount))
+                : "0";
+        }
     }
 
     function updateSaleTotal() {
@@ -1595,30 +2081,88 @@ async function initializeSalesPage() {
         });
 
         const quantity = Number(quantityInput.value);
-        const price = medicine ? medicine.price : 0;
+        const originalPrice = medicine ? medicine.price : 0;
+        const discount = medicine
+            ? normalizeDiscountPercent(discountInput ? discountInput.value : medicine.discount)
+            : 0;
+        const finalUnitPrice = medicine
+            ? calculateDiscountedPrice(originalPrice, discount)
+            : 0;
 
         const total =
             medicine && Number.isInteger(quantity) && quantity > 0
-                ? price * quantity
+                ? Math.round(finalUnitPrice * quantity * 100) / 100
                 : 0;
 
+        const origInput = document.getElementById("salesOriginalPrice");
+        if (origInput) {
+            origInput.value = "₱" + originalPrice.toFixed(2);
+        }
+
         document.getElementById("salesUnitPrice").value =
-            "₱" + price.toFixed(2);
+            "₱" + finalUnitPrice.toFixed(2);
 
         document.getElementById("salesTotal").value =
             "₱" + total.toFixed(2);
 
-        document.getElementById("salesStockInfo").textContent =
-            medicine ? "Available stock: " + medicine.quantity : "";
+        const cashValue = cashInput && cashInput.value.trim() !== ""
+            ? Number(cashInput.value)
+            : null;
+        const changeInput = document.getElementById("salesChange");
+        if (changeInput) {
+            if (cashValue !== null && Number.isFinite(cashValue)) {
+                const diff = cashValue - total;
+                changeInput.value = diff >= 0
+                    ? "₱" + diff.toFixed(2)
+                    : "Short ₱" + Math.abs(diff).toFixed(2);
+            } else {
+                changeInput.value = "₱0.00";
+            }
+        }
+
+        const stockInfo = document.getElementById("salesStockInfo");
+        if (stockInfo) {
+            stockInfo.textContent = medicine
+                ? "Available stock: " + medicine.quantity +
+                  (discount > 0 ? " · Discount applied: " + discount + "%" : "")
+                : "";
+        }
 
         quantityInput.max = medicine ? String(medicine.quantity) : "";
     }
 
-    medicineSelect.addEventListener("change", updateSaleTotal);
+    medicineSelect.addEventListener("change", function () {
+        applyMedicineDefaultDiscount();
+        updateSaleTotal();
+    });
     quantityInput.addEventListener("input", updateSaleTotal);
+    if (discountInput) discountInput.addEventListener("input", updateSaleTotal);
+    if (cashInput) cashInput.addEventListener("input", updateSaleTotal);
+
+    if (discountPresets && discountInput) {
+        discountPresets.addEventListener("click", function (event) {
+            const chip = event.target.closest(".discount-chip");
+            if (!chip) return;
+            if (chip.dataset.discount === "inventory") {
+                applyMedicineDefaultDiscount();
+            } else {
+                discountInput.value = chip.dataset.discount || "0";
+            }
+            updateSaleTotal();
+        });
+    }
+
+    if (printBtn) {
+        printBtn.addEventListener("click", function () {
+            window.print();
+        });
+    }
 
     form.addEventListener("reset", function () {
-        setTimeout(updateSaleTotal, 0);
+        setTimeout(function () {
+            if (discountInput) discountInput.value = "0";
+            updateSaleTotal();
+        }, 0);
     });
 
     searchInput.addEventListener("input", renderSalesRecords);
@@ -1628,6 +2172,8 @@ async function initializeSalesPage() {
 
         const medicineId = Number(medicineSelect.value);
         const quantity = Number(quantityInput.value);
+        const discountRaw = discountInput ? discountInput.value : "0";
+        const discountNum = discountRaw === "" ? 0 : Number(discountRaw);
 
         const medicine = inventoryMedicines.find(function (item) {
             return item.id === medicineId;
@@ -1651,11 +2197,32 @@ async function initializeSalesPage() {
             return;
         }
 
+        if (!Number.isFinite(discountNum) || discountNum < 0 || discountNum > 100) {
+            alert("Discount must be between 0% and 100%.");
+            return;
+        }
+
+        const discount = normalizeDiscountPercent(discountNum);
+        const finalUnitPrice = calculateDiscountedPrice(medicine.price, discount);
+        const total = Math.round(finalUnitPrice * quantity * 100) / 100;
+
+        const cashValue = cashInput && cashInput.value.trim() !== ""
+            ? Number(cashInput.value)
+            : null;
+        if (cashValue !== null && (!Number.isFinite(cashValue) || cashValue < total)) {
+            alert("Cash received is less than the total amount due (₱" + total.toFixed(2) + ").");
+            return;
+        }
+
+        const cashierName = getCurrentDisplayName();
+
         const confirmed = confirm(
             "Complete this sale?\n\n" +
-            "Medicine: " + medicine.name +
+            "Cashier: " + cashierName +
+            "\nMedicine: " + medicine.name +
             "\nQuantity: " + quantity +
-            "\nTotal: ₱" + (medicine.price * quantity).toFixed(2)
+            (discount > 0 ? "\nDiscount: " + discount + "%" : "") +
+            "\nTotal: ₱" + total.toFixed(2)
         );
 
         if (!confirmed) return;
@@ -1674,11 +2241,62 @@ async function initializeSalesPage() {
                 },
                 body: JSON.stringify({
                     medicine_id: medicine.id,
-                    quantity: quantity
+                    quantity: quantity,
+                    discount_percent: discount,
+                    cashier_name: cashierName
                 })
             });
 
-            const result = await response.json();
+            const result = await response.json().catch(() => ({}));
+
+            if (isServerDbUnavailable(response, result)) {
+                isDemoDatabaseMode = true;
+                medicine.quantity = Math.max(0, medicine.quantity - quantity);
+
+                const receiptNo = "EP-" + String(nextReceiptNumber++).padStart(4, "0");
+                const now = new Date();
+                const dateStr = now.toLocaleString("en-PH");
+
+                salesRecords.unshift({
+                    receipt: receiptNo,
+                    date: dateStr,
+                    timestamp: now.getTime(),
+                    cashierName,
+                    medicineName: medicine.name,
+                    quantity,
+                    originalPrice: medicine.price,
+                    discount,
+                    unitPrice: finalUnitPrice,
+                    total
+                });
+
+                renderPosReceipt({
+                    receipt: receiptNo,
+                    date: dateStr,
+                    cashierName,
+                    medicineName: medicine.name,
+                    quantity,
+                    discount,
+                    unitPrice: finalUnitPrice,
+                    total,
+                    cashTendered: cashValue,
+                    changeAmount: cashValue !== null ? Math.max(0, cashValue - total) : 0
+                });
+
+                await loadSalesMedicines();
+                renderSalesRecords();
+                form.reset();
+                updateSaleTotal();
+
+                showSalesMessage(
+                    `Sale completed in preview mode! Receipt ${receiptNo}.`
+                );
+
+                if (typeof refreshDashboardStats === "function") {
+                    refreshDashboardStats();
+                }
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(
@@ -1686,19 +2304,34 @@ async function initializeSalesPage() {
                 );
             }
 
-            // Reload stock from MySQL after successful sale.
-            await loadMedicinesFromDatabase();
+            const receiptNo = "EP-" + String(result.sale_id).padStart(4, "0");
+            const nowStr = new Date().toLocaleString("en-PH");
+
+            renderPosReceipt({
+                receipt: receiptNo,
+                date: nowStr,
+                cashierName,
+                medicineName: medicine.name,
+                quantity,
+                discount,
+                unitPrice: Number(result.unit_price ?? finalUnitPrice),
+                total: Number(result.total ?? total),
+                cashTendered: cashValue,
+                changeAmount: cashValue !== null
+                    ? Math.max(0, cashValue - Number(result.total ?? total))
+                    : 0
+            });
+
+            // Reload stock & sales from MySQL after successful sale.
+            await loadSalesMedicines();
             await loadSalesRecordsFromDatabase();
 
             form.reset();
             updateSaleTotal();
 
-            if (message) {
-                message.textContent =
-                    result.message +
-                    " Receipt: EP-" +
-                    String(result.sale_id).padStart(4, "0");
-            }
+            showSalesMessage(
+                (result.message || "Sale completed.") + " Receipt: " + receiptNo
+            );
 
             if (typeof refreshDashboardStats === "function") {
                 refreshDashboardStats();
@@ -1709,10 +2342,7 @@ async function initializeSalesPage() {
             }
         } catch (error) {
             console.error("Sale error:", error);
-
-            alert(
-                "Hindi nakumpleto ang sale.\n\n" + error.message
-            );
+            showSalesMessage(error.message || "Unable to complete sale.", true);
         } finally {
             if (submitButton) submitButton.disabled = false;
         }
@@ -1730,8 +2360,9 @@ function renderSalesRecords() {
 
     if (!tbody) return;
 
-    const search = document.getElementById("salesSearch")
-        .value.trim().toLowerCase();
+    const search = (
+        document.getElementById("salesSearch")?.value || ""
+    ).trim().toLowerCase();
 
     const today = new Date();
 
@@ -1762,7 +2393,8 @@ function renderSalesRecords() {
 
     const filteredRecords = salesRecords.filter(function (sale) {
         return sale.receipt.toLowerCase().includes(search) ||
-            sale.medicineName.toLowerCase().includes(search);
+            sale.medicineName.toLowerCase().includes(search) ||
+            (sale.cashierName || "").toLowerCase().includes(search);
     });
 
     tbody.innerHTML = "";
@@ -1771,7 +2403,7 @@ function renderSalesRecords() {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
 
-        cell.colSpan = 6;
+        cell.colSpan = 8;
         cell.className = "inventory-empty";
         cell.textContent = "No sales records found.";
 
@@ -1782,19 +2414,40 @@ function renderSalesRecords() {
 
     filteredRecords.forEach(function (sale) {
         const row = document.createElement("tr");
+        const discount = normalizeDiscountPercent(sale.discount);
 
-        [
+        const cellsText = [
             sale.receipt,
             sale.date,
+            sale.cashierName || "Admin",
             sale.medicineName,
             String(sale.quantity),
-            "₱" + sale.unitPrice.toFixed(2),
-            "₱" + sale.total.toFixed(2)
-        ].forEach(function (value) {
+            "₱" + Number(sale.unitPrice).toFixed(2)
+        ];
+
+        cellsText.forEach(function (value) {
             const cell = document.createElement("td");
             cell.textContent = value;
             row.appendChild(cell);
         });
+
+        const discountCell = document.createElement("td");
+        const discountBadge = document.createElement("span");
+        if (discount > 0) {
+            discountBadge.className = "badge discount";
+            discountBadge.textContent = discount + "% OFF";
+        } else {
+            discountBadge.className = "badge neutral";
+            discountBadge.textContent = "None";
+        }
+        discountCell.appendChild(discountBadge);
+        row.appendChild(discountCell);
+
+        const totalCell = document.createElement("td");
+        const totalStrong = document.createElement("strong");
+        totalStrong.textContent = "₱" + Number(sale.total).toFixed(2);
+        totalCell.appendChild(totalStrong);
+        row.appendChild(totalCell);
 
         tbody.appendChild(row);
     });
@@ -1802,7 +2455,6 @@ function renderSalesRecords() {
 
 /* =========================================
    E-PHARMA PURCHASE MANAGEMENT
-   Demo session only
 ========================================= */
 
 
@@ -1835,6 +2487,17 @@ async function initializePurchasePage() {
                 medicine.name + " (Stock: " + medicine.quantity + ")";
             medicineSelect.appendChild(option);
         });
+
+        if (pendingPurchaseMedicineId !== null) {
+            medicineSelect.value = String(pendingPurchaseMedicineId);
+            pendingPurchaseMedicineId = null;
+            const selectedMed = inventoryMedicines.find(
+                item => item.id === Number(medicineSelect.value)
+            );
+            if (selectedMed) {
+                costInput.value = selectedMed.price.toFixed(2);
+            }
+        }
     }
 
     function updatePurchaseTotal() {
@@ -1923,7 +2586,30 @@ async function initializePurchasePage() {
                 })
             });
 
-            const result = await response.json();
+            const result = await response.json().catch(() => ({}));
+
+            if (isServerDbUnavailable(response, result)) {
+                isDemoDatabaseMode = true;
+                const purchaseId = nextPurchaseNumber++;
+                purchaseRecords.unshift({
+                    purchaseNo: "PUR-" + String(purchaseId).padStart(4, "0"),
+                    date: new Date().toLocaleString("en-PH"),
+                    medicineId: medicine.id,
+                    medicineName: medicine.name,
+                    supplier,
+                    quantity,
+                    unitCost,
+                    total,
+                    status: "Pending"
+                });
+                form.reset();
+                updatePurchaseTotal();
+                renderPurchaseRecords();
+                if (message) {
+                    message.textContent = "Purchase recorded in local preview mode (mark Received to test stock update).";
+                }
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(result.message || "Unable to save purchase.");
@@ -1940,7 +2626,10 @@ async function initializePurchasePage() {
             }
         } catch (error) {
             console.error("Save purchase error:", error);
-            alert("Hindi na-save ang purchase.\n\n" + error.message);
+            if (message) {
+                message.textContent = error.message || "Unable to save purchase.";
+                message.style.color = "#B91C1C";
+            }
         }
     });
 
@@ -2006,8 +2695,7 @@ function renderPurchaseRecords() {
             record.supplier,
             String(record.quantity),
             "₱" + Number(record.unitCost).toFixed(2),
-            "₱" + Number(record.total).toFixed(2),
-            record.status || "Pending"
+            "₱" + Number(record.total).toFixed(2)
         ];
 
         values.forEach(function (value) {
@@ -2016,9 +2704,17 @@ function renderPurchaseRecords() {
             row.appendChild(cell);
         });
 
+        const statusCell = document.createElement("td");
+        const statusBadge = document.createElement("span");
+        const statusText = record.status || "Pending";
+        statusBadge.className = "badge " + (statusText === "Received" ? "success" : "warning");
+        statusBadge.textContent = statusText;
+        statusCell.appendChild(statusBadge);
+        row.appendChild(statusCell);
+
         const actionCell = document.createElement("td");
 
-        if ((record.status || "Pending") === "Pending") {
+        if (statusText === "Pending") {
             const receiveButton = document.createElement("button");
 
             receiveButton.type = "button";
@@ -2030,15 +2726,34 @@ function renderPurchaseRecords() {
             actionCell.appendChild(receiveButton);
         } else {
             actionCell.textContent =
-                record.status === "Received" ? "Completed" : record.status;
+                statusText === "Received" ? "Completed" : statusText;
         }
 
         row.appendChild(actionCell);
         tbody.appendChild(row);
     });
 }
-let supplierRecords = [];
-let nextSupplierId = 1;
+let supplierRecords = [
+    {
+        id: 1,
+        name: "MedCore Pharma Distributors",
+        contact: "Elena Santos",
+        phone: "09171234567",
+        email: "orders@medcoreph.example",
+        address: "Dasmariñas City, Cavite",
+        status: "Active"
+    },
+    {
+        id: 2,
+        name: "VitaPlus Healthcare Supply",
+        contact: "Marco Reyes",
+        phone: "09189876543",
+        email: "sales@vitaplus.example",
+        address: "Imus, Cavite",
+        status: "Active"
+    }
+];
+let nextSupplierId = 3;
 
 async function initializeSuppliersPage() {
     const form = document.getElementById("supplierForm");
@@ -2052,27 +2767,23 @@ async function initializeSuppliersPage() {
         return;
     }
 
-    // Load suppliers from MySQL
+    // Load suppliers from MySQL (or fallback demo data if DB offline)
     await loadSuppliersFromDatabase();
 
     // Show Add Supplier form
-   addButton.onclick = function (event) {
-    event.preventDefault();
+    addButton.onclick = function (event) {
+        event.preventDefault();
 
-    const supplierForm = document.getElementById("supplierForm");
+        const supplierForm = document.getElementById("supplierForm");
+        if (!supplierForm) return;
 
-    if (!supplierForm) {
-        console.error("supplierForm not found");
-        return;
-    }
-
-    supplierForm.hidden = false;
-    supplierForm.removeAttribute("hidden");
-    supplierForm.style.display = "block";
-    supplierForm.style.visibility = "visible";
-
-    console.log("Add Supplier clicked");
-};
+        supplierForm.reset();
+        document.getElementById("supplierId").value = "";
+        supplierForm.hidden = false;
+        supplierForm.removeAttribute("hidden");
+        supplierForm.style.display = "block";
+        supplierForm.style.visibility = "visible";
+    };
 
     // Hide form
     cancelButton.onclick = function () {
@@ -2122,7 +2833,37 @@ async function initializeSuppliersPage() {
                 }
             );
 
-            const result = await response.json();
+            const result = await response.json().catch(() => ({}));
+
+            if (isServerDbUnavailable(response, result)) {
+                isDemoDatabaseMode = true;
+                if (id) {
+                    const existing = supplierRecords.find(s => s.id === Number(id));
+                    if (existing) {
+                        existing.name = supplier.supplier_name;
+                        existing.contact = supplier.contact_person;
+                        existing.phone = supplier.phone;
+                        existing.email = supplier.email;
+                        existing.address = supplier.address;
+                        existing.status = supplier.status;
+                    }
+                } else {
+                    supplierRecords.unshift({
+                        id: nextSupplierId++,
+                        name: supplier.supplier_name,
+                        contact: supplier.contact_person,
+                        phone: supplier.phone,
+                        email: supplier.email,
+                        address: supplier.address,
+                        status: supplier.status
+                    });
+                }
+                form.reset();
+                form.style.display = "none";
+                renderSuppliers();
+                showSupplierMessage("Supplier saved in local preview mode.");
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(result.message || "Failed to save supplier.");
@@ -2191,7 +2932,15 @@ async function initializeSuppliersPage() {
                     method: "DELETE"
                 });
 
-                const result = await response.json();
+                const result = await response.json().catch(() => ({}));
+
+                if (isServerDbUnavailable(response, result)) {
+                    isDemoDatabaseMode = true;
+                    supplierRecords = supplierRecords.filter(item => item.id !== id);
+                    renderSuppliers();
+                    showSupplierMessage("Supplier removed in local preview mode.");
+                    return;
+                }
 
                 if (!response.ok) {
                     throw new Error(result.message || "Failed to delete supplier.");
@@ -2216,13 +2965,19 @@ async function initializeSuppliersPage() {
 async function loadSuppliersFromDatabase() {
     try {
         const response = await fetch("/api/suppliers");
+        const rows = await response.json().catch(() => ([]));
+
+        if (isServerDbUnavailable(response, rows)) {
+            isDemoDatabaseMode = true;
+            renderSuppliers();
+            return;
+        }
 
         if (!response.ok) {
             throw new Error("Failed to load suppliers.");
         }
 
-        const rows = await response.json();
-
+        isDemoDatabaseMode = false;
         supplierRecords = rows.map(row => ({
             id: Number(row.supplier_id),
             name: row.supplier_name || "",
@@ -2242,7 +2997,8 @@ async function loadSuppliersFromDatabase() {
 
     } catch (error) {
         console.error("Load suppliers error:", error);
-        showSupplierMessage("Hindi ma-load ang suppliers. Check your server.", true);
+        renderSuppliers();
+        showSupplierMessage("Showing local preview suppliers (MySQL not connected).", false);
     }
 }
 
@@ -2506,6 +3262,7 @@ async function initializeSettingsPage() {
 
     const adminNameInput = document.getElementById("settingAdminName");
     const adminEmailInput = document.getElementById("settingAdminEmail");
+    const cashierNameInput = document.getElementById("settingCashierName");
     const dateFormatInput = document.getElementById("settingDateFormat");
     const lowStockInput = document.getElementById("settingLowStock");
 
@@ -2575,6 +3332,7 @@ async function initializeSettingsPage() {
 
         if (adminNameInput) adminNameInput.value = settings.adminName || "Admin";
         if (adminEmailInput) adminEmailInput.value = settings.adminEmail || "";
+        if (cashierNameInput) cashierNameInput.value = settings.cashierName || "Cashier";
         if (dateFormatInput) dateFormatInput.value = settings.dateFormat || "MM/DD/YYYY";
         if (lowStockInput) lowStockInput.value = settings.lowStockLevel || 10;
 
@@ -2676,16 +3434,22 @@ async function initializeSettingsPage() {
     adminForm.onsubmit = async function (event) {
         event.preventDefault();
         const adminName = adminNameInput ? adminNameInput.value.trim() : "";
+        const cashierName = cashierNameInput ? cashierNameInput.value.trim() : "Cashier";
         if (!adminName) {
             showSettingsMessage("Please enter the administrator name.", true);
+            return;
+        }
+        if (!cashierName) {
+            showSettingsMessage("Please enter the cashier display name.", true);
             return;
         }
 
         await branding.saveSettings({
             adminName,
-            adminEmail: adminEmailInput ? adminEmailInput.value.trim() : ""
+            adminEmail: adminEmailInput ? adminEmailInput.value.trim() : "",
+            cashierName
         });
-        showSettingsMessage("Administrator profile saved.", false);
+        showSettingsMessage("Staff profiles saved.", false);
     };
 
     systemForm.onsubmit = async function (event) {
@@ -2721,16 +3485,16 @@ function initializeNotifications() {
 
     if (!button || !panel || !markReadButton) return;
 
-   button.onclick = function (event) {
-    event.stopPropagation();
+    button.onclick = function (event) {
+        event.stopPropagation();
 
-    panel.hidden = !panel.hidden;
-    button.setAttribute("aria-expanded", String(!panel.hidden));
+        panel.hidden = !panel.hidden;
+        button.setAttribute("aria-expanded", String(!panel.hidden));
 
-    if (!panel.hidden) {
-        renderNotifications();
-    }
-};
+        if (!panel.hidden) {
+            renderNotifications();
+        }
+    };
 
     panel.onclick = function (event) {
         event.stopPropagation();
@@ -2855,21 +3619,71 @@ initializeNotifications();
 function refreshDashboardStats() {
     const totalMedicinesElement = document.getElementById("totalMedicines");
     const lowStockElement = document.getElementById("lowStock");
+    const totalSalesElement = document.getElementById("totalSales");
+    const expiringSoonElement = document.getElementById("expiringSoon");
 
     if (typeof inventoryMedicines !== "undefined") {
         const totalMedicines = inventoryMedicines.length;
 
-        const lowStockCount = inventoryMedicines.filter(medicine =>
+        const lowStockMedicines = inventoryMedicines.filter(medicine =>
             Number(medicine.quantity) <= Number(medicine.reorderLevel)
-        ).length;
+        );
 
         if (totalMedicinesElement) {
             totalMedicinesElement.textContent = totalMedicines;
         }
 
         if (lowStockElement) {
-            lowStockElement.textContent = lowStockCount;
+            lowStockElement.textContent = lowStockMedicines.length;
         }
+
+        const lowStockBody = document.querySelector("#lowStockTable tbody");
+        if (lowStockBody && lowStockMedicines.length > 0) {
+            lowStockBody.innerHTML = lowStockMedicines.slice(0, 5).map(med => `
+                <tr>
+                    <td>
+                        <strong>${escapeSupplierText(med.name)}</strong>
+                        <small>${escapeSupplierText(med.category || "Medicine")}</small>
+                    </td>
+                    <td>${med.quantity}</td>
+                    <td>
+                        <span class="badge ${med.quantity === 0 ? "danger" : "warning"}">
+                            ${med.quantity === 0 ? "Out" : "Low"}
+                        </span>
+                    </td>
+                </tr>
+            `).join("");
+        }
+    }
+
+    if (typeof salesRecords !== "undefined" && salesRecords.length > 0) {
+        const salesTotalSum = salesRecords.reduce((sum, s) => sum + Number(s.total || 0), 0);
+        if (totalSalesElement) {
+            totalSalesElement.textContent = "₱" + salesTotalSum.toLocaleString("en-PH", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2
+            });
+        }
+        const recentSalesBody = document.querySelector("#recentSalesTable tbody");
+        if (recentSalesBody) {
+            recentSalesBody.innerHTML = salesRecords.slice(0, 5).map(sale => `
+                <tr>
+                    <td>${escapeSupplierText(sale.receipt)}</td>
+                    <td>${escapeSupplierText(sale.date)}</td>
+                    <td>${sale.quantity} item${sale.quantity === 1 ? "" : "s"} (${escapeSupplierText(sale.medicineName)})</td>
+                    <td>₱${Number(sale.total).toFixed(2)}</td>
+                    <td><span class="badge success">Completed</span></td>
+                </tr>
+            `).join("");
+        }
+    }
+
+    if (typeof expirationMedicines !== "undefined" && expiringSoonElement) {
+        const expAlerts = expirationMedicines.filter(med => {
+            const st = getExpirationStatus(med.expiry).status;
+            return st === "Expired" || st === "Expiring Soon";
+        }).length;
+        expiringSoonElement.textContent = expAlerts;
     }
 
     renderNotifications();
@@ -2879,19 +3693,29 @@ function refreshDashboardStats() {
 async function loadMedicinesFromDatabase() {
     try {
         const response = await fetch("/api/medicines");
+        const rows = await response.json().catch(() => ({}));
+
+        if (isServerDbUnavailable(response, rows)) {
+            isDemoDatabaseMode = true;
+            renderInventory();
+            if (typeof refreshDashboardStats === "function") {
+                refreshDashboardStats();
+            }
+            return;
+        }
 
         if (!response.ok) {
             throw new Error("Failed to load medicines from MySQL.");
         }
 
-        const rows = await response.json();
-
+        isDemoDatabaseMode = false;
         inventoryMedicines = rows.map(function (row) {
             return {
                 id: Number(row.medicine_id),
                 name: row.medicine_name,
                 category: row.category || "",
                 price: Number(row.price),
+                discount: normalizeDiscountPercent(row.discount_percent),
                 quantity: Number(row.quantity),
                 reorderLevel: Number(row.reorder_level)
             };
@@ -2911,9 +3735,9 @@ async function loadMedicinesFromDatabase() {
         }
     } catch (error) {
         console.error("Load medicines error:", error);
+        renderInventory();
         showInventoryMessage(
-            "Hindi makuha ang medicines. Tingnan kung tumatakbo ang server.",
-            true
+            "Showing local preview inventory (connect MySQL for database persistence)."
         );
     }
 }
@@ -2922,21 +3746,33 @@ async function loadMedicinesFromDatabase() {
 async function loadSalesRecordsFromDatabase() {
     try {
         const response = await fetch("/api/sales");
+        const rows = await response.json().catch(() => ({}));
+
+        if (isServerDbUnavailable(response, rows)) {
+            isDemoDatabaseMode = true;
+            renderSalesRecords();
+            if (typeof refreshDashboardStats === "function") {
+                refreshDashboardStats();
+            }
+            return;
+        }
 
         if (!response.ok) {
             throw new Error("Unable to load sales history.");
         }
 
-        const rows = await response.json();
-
+        isDemoDatabaseMode = false;
         salesRecords = rows.map(function (row) {
             return {
                 receipt: "EP-" +
                     String(row.sale_id).padStart(4, "0"),
                 date: new Date(row.sale_date).toLocaleString("en-PH"),
                 timestamp: new Date(row.sale_date).getTime(),
+                cashierName: row.cashier_name || "Admin",
                 medicineName: row.medicine_name,
                 quantity: Number(row.quantity),
+                originalPrice: Number(row.original_price || row.unit_price),
+                discount: normalizeDiscountPercent(row.discount_percent),
                 unitPrice: Number(row.unit_price),
                 total: Number(row.subtotal)
             };
@@ -2951,25 +3787,31 @@ async function loadSalesRecordsFromDatabase() {
         );
 
         renderSalesRecords();
+        if (typeof refreshDashboardStats === "function") {
+            refreshDashboardStats();
+        }
     } catch (error) {
         console.error("Load sales error:", error);
-        showInventoryMessage(
-            "Hindi ma-load ang sales history mula sa database.",
-            true
-        );
+        renderSalesRecords();
     }
 }
 
 async function loadPurchaseRecordsFromDatabase() {
     try {
         const response = await fetch("/api/purchases");
+        const rows = await response.json().catch(() => ({}));
+
+        if (isServerDbUnavailable(response, rows)) {
+            isDemoDatabaseMode = true;
+            renderPurchaseRecords();
+            return;
+        }
 
         if (!response.ok) {
             throw new Error("Unable to load purchase records.");
         }
 
-        const rows = await response.json();
-
+        isDemoDatabaseMode = false;
         purchaseRecords = rows.map(function (row) {
             return {
                 purchaseNo: "PUR-" +
@@ -2998,7 +3840,7 @@ async function loadPurchaseRecordsFromDatabase() {
         renderPurchaseRecords();
     } catch (error) {
         console.error("Load purchases error:", error);
-        alert("Hindi ma-load ang purchase records. Tingnan ang server.");
+        renderPurchaseRecords();
     }
 }
 
@@ -3031,7 +3873,29 @@ function initializePurchaseReceiveButton() {
                 { method: "PATCH" }
             );
 
-            const result = await response.json();
+            const result = await response.json().catch(() => ({}));
+
+            if (isServerDbUnavailable(response, result)) {
+                isDemoDatabaseMode = true;
+                const record = purchaseRecords.find(
+                    item => item.purchaseNo.replace("PUR-", "") === String(purchaseId)
+                );
+                if (record && record.status === "Pending") {
+                    record.status = "Received";
+                    const med = inventoryMedicines.find(m => m.id === record.medicineId);
+                    if (med) {
+                        med.quantity += record.quantity;
+                    }
+                }
+                renderPurchaseRecords();
+                refreshDashboardStats();
+
+                const message = document.getElementById("purchaseMessage");
+                if (message) {
+                    message.textContent = "Purchase marked Received in local preview mode; stock updated.";
+                }
+                return;
+            }
 
             if (!response.ok) {
                 throw new Error(
@@ -3056,4 +3920,26 @@ function initializePurchaseReceiveButton() {
         }
     });
 }
+
+// =========================================
+// INITIAL ROLE & ROUTE STARTUP
+// =========================================
+
+(function bootRoleAndInitialPage() {
+    applyRoleAccessControl();
+
+    const hashPage = (window.location.hash || "").replace(/^#/, "").trim();
+    const defaultPage = isCashierRole() ? "sales" : "dashboard";
+    const startPage = hashPage && canAccessPage(hashPage)
+        ? hashPage
+        : defaultPage;
+
+    if (startPage !== "dashboard") {
+        showPage(startPage);
+    } else {
+        loadMedicinesFromDatabase();
+        loadSalesRecordsFromDatabase();
+    }
+})();
+
 

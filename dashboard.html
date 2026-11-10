@@ -32,50 +32,57 @@
             </div>
         </div>
 
-        <p class="menu-label">MAIN MENU</p>
+        <p class="menu-label" id="sidebarMenuLabel">ADMIN MENU</p>
 
         <nav class="navigation" aria-label="Main navigation">
 
             <a href="#dashboard"
                class="nav-link active"
                data-page="dashboard"
+               data-roles="admin"
                aria-current="page">
                 <span>▦</span> Dashboard
             </a>
 
             <a href="#inventory"
                class="nav-link"
-               data-page="inventory">
+               data-page="inventory"
+               data-roles="admin,cashier">
                 <span>▤</span> Inventory
             </a>
 
             <a href="#sales"
                class="nav-link"
-               data-page="sales">
-                <span>▣</span> Sales
+               data-page="sales"
+               data-roles="admin,cashier">
+                <span>▣</span> Sales (POS)
             </a>
 
             <a href="#purchase"
                class="nav-link"
-               data-page="purchase">
+               data-page="purchase"
+               data-roles="admin">
                 <span>🛒</span> Purchase
             </a>
 
             <a href="#suppliers"
                class="nav-link"
-               data-page="suppliers">
+               data-page="suppliers"
+               data-roles="admin">
                 <span>♧</span> Suppliers
             </a>
 
             <a href="#expiration"
                class="nav-link"
-               data-page="expiration">
+               data-page="expiration"
+               data-roles="admin,cashier">
                 <span>◷</span> Expiration
             </a>
 
             <a href="#settings"
                class="nav-link"
-               data-page="settings">
+               data-page="settings"
+               data-roles="admin">
                 <span>⚙</span> Settings
             </a>
 
@@ -88,14 +95,14 @@
 
                 <div>
                     <strong id="sidebarAdminName">Administrator</strong>
-                    <small>Pharmacy Admin</small>
+                    <small id="sidebarRoleLabel">Pharmacy Admin</small>
                 </div>
             </div>
 
             <button type="button"
                     class="logout-button"
                     id="logoutButton">
-                ↪ <span>Logout</span>
+                ↪ <span>Switch / Logout</span>
             </button>
 
         </div>
@@ -174,14 +181,16 @@
         </div>
     </div>
 
-    <!-- ADMIN PROFILE -->
+    <!-- ACTIVE ROLE & USER PROFILE -->
+    <span class="role-badge role-badge--admin" id="topbarRoleBadge">Admin</span>
+
     <div class="topbar-user">
 
         <div class="avatar" id="topbarAdminAvatar">A</div>
 
         <div class="topbar-user-info">
             <strong id="topbarAdminName">Admin</strong>
-            <small>Administrator</small>
+            <small id="topbarRoleLabel">Administrator</small>
         </div>
 
     </div>
@@ -248,7 +257,7 @@
                     </div>
 
                     <p class="stat-note">
-                        Sample monthly sales
+                        Monthly revenue overview
                     </p>
                 </article>
 
@@ -296,7 +305,7 @@
                     <div class="panel-heading">
                         <div>
                             <h3>Sales Overview</h3>
-                            <p>Sample sales performance</p>
+                            <p>Sales performance summary</p>
                         </div>
 
                         <select id="salesPeriod"
@@ -310,7 +319,7 @@
 
                     <div class="chart-summary">
                         <strong id="chartTotal">₱25,430</strong>
-                        <span>Sample total</span>
+                        <span>Period total</span>
                     </div>
 
                     <div class="chart" id="salesChart">
@@ -471,7 +480,7 @@
                 <div class="panel-heading">
                     <div>
                         <h3>Recent Sales</h3>
-                        <p>Latest sample transactions</p>
+                        <p>Latest pharmacy transactions</p>
                     </div>
 
                     <a href="#sales"

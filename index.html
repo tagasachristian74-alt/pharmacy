@@ -54,17 +54,38 @@
                 <div class="form-heading">
                     <span class="welcome-label">WELCOME BACK</span>
                     <h2>Login to your account</h2>
-                    <p>Enter your credentials to continue.</p>
+                    <p>Choose your role and enter your credentials to continue.</p>
+                </div>
+
+                <div class="role-switcher" role="tablist" aria-label="Select account role">
+                    <button type="button"
+                            class="role-tab active"
+                            id="roleTabAdmin"
+                            data-role="admin"
+                            role="tab"
+                            aria-selected="true">
+                        <strong>Admin</strong>
+                        <span>Full management</span>
+                    </button>
+                    <button type="button"
+                            class="role-tab"
+                            id="roleTabCashier"
+                            data-role="cashier"
+                            role="tab"
+                            aria-selected="false">
+                        <strong>Cashier</strong>
+                        <span>POS &amp; sales</span>
+                    </button>
                 </div>
 
                 <form id="loginForm">
 
                     <div class="input-group">
-                        <label for="username">Username or Email</label>
+                        <label for="username">Username</label>
                         <input
                             type="text"
                             id="username"
-                            placeholder="Enter your username"
+                            placeholder="Enter admin username"
                             autocomplete="username"
                             required>
                     </div>
@@ -104,12 +125,27 @@
                     <p id="message" class="message"
                        role="alert" aria-live="polite"></p>
 
-                    <button type="submit" class="login-button">
-                        Login to Dashboard
+                    <button type="submit" class="login-button" id="loginSubmitBtn">
+                        <span id="loginBtnLabel">Login as Admin</span>
                         <span>→</span>
                     </button>
 
                 </form>
+
+                <div class="quick-demo-box">
+                    <div class="quick-demo-header">
+                        <span>Quick Demo Access</span>
+                        <small id="demoRoleHint">Admin: admin / Admin123!</small>
+                    </div>
+                    <div class="quick-demo-actions">
+                        <button type="button" class="quick-demo-btn" id="fillAdminDemo">
+                            Use Admin
+                        </button>
+                        <button type="button" class="quick-demo-btn" id="fillCashierDemo">
+                            Use Cashier
+                        </button>
+                    </div>
+                </div>
 
                 <div class="security-note">
                     <span>🔒</span>

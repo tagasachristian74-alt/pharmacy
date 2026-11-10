@@ -70,27 +70,30 @@
 
 .inventory-summary {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 15px;
-    margin-bottom: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 22px;
 }
 
 .inventory-summary-card {
     background: white;
     border: 1px solid #E4ECEF;
-    border-radius: 12px;
+    border-radius: 14px;
     padding: 20px;
+    box-shadow: 0 3px 12px rgba(18, 49, 58, 0.02);
 }
 
 .inventory-summary-card p {
-    color: #7A8A92;
-    font-size: 12px;
-    margin-bottom: 10px;
+    color: #64748B;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 8px;
 }
 
 .inventory-summary-card h3 {
-    font-size: 25px;
-    color: #172B35;
+    font-size: 26px;
+    font-weight: 700;
+    color: #102A33;
 }
 
 .inventory-table td {
@@ -100,30 +103,55 @@
 .inventory-table .action-buttons {
     display: flex;
     gap: 6px;
+    flex-wrap: wrap;
 }
 
 .inventory-table .action-buttons button {
-    border: 1px solid #E0E8EB;
-    border-radius: 6px;
+    border: 1px solid #D9E4E8;
+    border-radius: 7px;
     background: white;
-    padding: 7px 9px;
+    color: #1E293B;
+    padding: 6px 11px;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12.5px;
+    font-weight: 600;
+    transition: 0.15s ease;
 }
 
-.inventory-table .action-buttons button:hover {
+.inventory-table .action-buttons button:hover:not(:disabled) {
     background: #E8F5F2;
+    border-color: #B4E0D8;
+    color: #067D70;
 }
 
-.inventory-table .action-buttons .delete-button:hover {
+.inventory-table .action-buttons button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.inventory-table .action-buttons .delete-button:hover:not(:disabled) {
     background: #FCE8E9;
+    border-color: #F6C2C6;
+    color: #B91C1C;
+}
+
+.inventory-table .action-buttons .sell-quick-button {
+    background: #079B89;
+    border-color: #079B89;
+    color: #FFFFFF;
+}
+
+.inventory-table .action-buttons .sell-quick-button:hover:not(:disabled) {
+    background: #067D70;
+    border-color: #067D70;
+    color: #FFFFFF;
 }
 
 .inventory-form {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px;
-    margin-top: 20px;
+    margin-top: 18px;
 }
 
 .inventory-form .form-field {
@@ -133,20 +161,28 @@
 }
 
 .inventory-form label {
-    font-size: 12px;
-    font-weight: bold;
-    color: #435760;
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
 }
 
 .inventory-form input,
 .inventory-form select {
     width: 100%;
-    height: 42px;
-    border: 1px solid #E0E8EB;
-    border-radius: 8px;
-    padding: 0 11px;
+    height: 43px;
+    border: 1px solid #D9E4E8;
+    border-radius: 9px;
+    padding: 0 12px;
     background: #FFFFFF;
+    color: #1E293B;
+    font-size: 14px;
     outline: none;
+}
+
+.inventory-form input[readonly] {
+    background: #F8FAFC;
+    color: #0F2933;
+    font-weight: 600;
 }
 
 .inventory-form .form-full {
@@ -158,19 +194,142 @@
     justify-content: flex-end;
     gap: 10px;
     grid-column: 1 / -1;
-    margin-top: 5px;
+    margin-top: 6px;
 }
 
 .inventory-message {
-    margin-top: 12px;
-    font-size: 12px;
+    margin-top: 14px;
+    font-size: 13.5px;
+    font-weight: 600;
     color: #067D70;
 }
 
 .inventory-empty {
     text-align: center;
-    color: #7A8A92;
-    padding: 30px 12px;
+    color: #64748B;
+    padding: 32px 12px;
+    font-size: 14px;
+}
+
+.discount-presets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.discount-chip {
+    border: 1px solid #D3E3E6;
+    background: #F8FBFC;
+    color: #334155;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.15s ease;
+}
+
+.discount-chip:hover,
+.discount-chip.active {
+    background: #E0F5F1;
+    border-color: #079B89;
+    color: #067D70;
+}
+
+.price-preview-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: #F1FAF8;
+    border: 1px solid #C8ECE5;
+    color: #102A33;
+    font-size: 13.5px;
+}
+
+.price-preview-banner strong {
+    color: #067D70;
+    font-size: 16px;
+}
+
+.role-notice-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    margin-bottom: 18px;
+    border-radius: 10px;
+    background: #EFF6FF;
+    border: 1px solid #BFDBFE;
+    color: #1E40AF;
+    font-size: 13.5px;
+    font-weight: 500;
+}
+
+.sales-highlight-total input {
+    background: #EFFAF7 !important;
+    border-color: #8CD6CA !important;
+    color: #067D70 !important;
+    font-size: 17px !important;
+    font-weight: 700 !important;
+}
+
+.pos-receipt-card {
+    margin-top: 20px;
+    padding: 20px;
+    border: 1px dashed #94A3B8;
+    border-radius: 12px;
+    background: #FAFCFC;
+}
+
+.pos-receipt-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid #E2E8F0;
+}
+
+.pos-receipt-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.pos-receipt-brand img {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    object-fit: contain;
+    background: #ffffff;
+    border: 1px solid #E2E8F0;
+}
+
+.pos-receipt-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px 18px;
+    font-size: 13px;
+}
+
+.pos-receipt-grid span {
+    display: block;
+    font-size: 11.5px;
+    color: #64748B;
+}
+
+.pos-receipt-grid strong {
+    color: #0F2933;
+    font-size: 13.5px;
 }
 
 @media (max-width: 700px) {
@@ -204,19 +363,27 @@
     align-items: center;
     gap: 16px;
     flex-wrap: wrap;
-    margin-bottom: 28px;
+    margin-bottom: 24px;
+}
+
+#pageContent .page-heading .breadcrumb {
+    margin: 0 0 6px;
+    color: #64748B;
+    font-size: 12px;
+    font-weight: 600;
 }
 
 #pageContent .page-heading h1 {
     margin: 0 0 6px;
-    font-size: 30px;
+    font-size: 28px;
     font-weight: 700;
-    color: #172b4d;
+    color: #102A33;
 }
 
-#pageContent .page-heading p {
+#pageContent .page-heading .subtitle,
+#pageContent .page-heading p:not(.breadcrumb) {
     margin: 0;
-    color: #64748b;
+    color: #5C6F78;
     font-size: 14px;
 }
 

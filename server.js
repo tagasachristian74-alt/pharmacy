@@ -26,6 +26,78 @@ const db = mysql.createPool({
     queueLimit: 0
 });
 
+const DB_CONN_ERRORS = new Set([
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EHOSTUNREACH",
+    "ENOTFOUND",
+    "PROTOCOL_CONNECTION_LOST",
+    "ER_ACCESS_DENIED_ERROR",
+    "ER_BAD_DB_ERROR"
+]);
+
+function isDbConnectionError(error) {
+    return Boolean(
+        error &&
+        (DB_CONN_ERRORS.has(error.code) || error.errno === 1045 || error.errno === 1049)
+    );
+}
+
+function sendDbError(res, error, fallbackMessage) {
+    if (isDbConnectionError(error)) {
+        return res.status(503).json({
+            dbUnavailable: true,
+            message: "Database connection unavailable. Using demo/local fallback."
+        });
+    }
+    return res.status(500).json({
+        message: fallbackMessage
+    });
+}
+
+let schemaUpgraded = false;
+async function ensureSchemaUpgrades() {
+    if (schemaUpgraded) return;
+
+    const dbName = process.env.DB_NAME || "epharma_db";
+    const checks = [
+        {
+            table: "medicines",
+            column: "discount_percent",
+            sql: "ALTER TABLE medicines ADD COLUMN discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0.00 AFTER price"
+        },
+        {
+            table: "sales",
+            column: "cashier_name",
+            sql: "ALTER TABLE sales ADD COLUMN cashier_name VARCHAR(120) DEFAULT 'Admin' AFTER total_amount"
+        },
+        {
+            table: "sale_items",
+            column: "original_price",
+            sql: "ALTER TABLE sale_items ADD COLUMN original_price DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER quantity"
+        },
+        {
+            table: "sale_items",
+            column: "discount_percent",
+            sql: "ALTER TABLE sale_items ADD COLUMN discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0.00 AFTER unit_price"
+        }
+    ];
+
+    for (const check of checks) {
+        const [cols] = await db.query(
+            `SELECT COLUMN_NAME
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+            [dbName, check.table, check.column]
+        );
+        if (cols.length === 0) {
+            await db.query(check.sql);
+        }
+    }
+
+    schemaUpgraded = true;
+}
+
 // Test server
 app.get("/api", (req, res) => {
     res.json({
@@ -59,6 +131,7 @@ app.get("/api/test-db", async (req, res) => {
 // Get all medicines
 app.get("/api/medicines", async (req, res) => {
     try {
+        await ensureSchemaUpgrades();
         const [rows] = await db.query(
             "SELECT * FROM medicines ORDER BY medicine_id DESC"
         );
@@ -66,9 +139,7 @@ app.get("/api/medicines", async (req, res) => {
         res.json(rows);
     } catch (error) {
         console.error("Get medicines error:", error.message);
-        res.status(500).json({
-            message: "Unable to retrieve medicines."
-        });
+        sendDbError(res, error, "Unable to retrieve medicines.");
     }
 });
 
@@ -79,35 +150,46 @@ app.post("/api/medicines", async (req, res) => {
             medicine_name,
             category,
             price,
+            discount_percent,
             quantity,
             reorder_level,
             expiry_date,
             batch_number
         } = req.body;
 
+        const discount = discount_percent === undefined || discount_percent === ""
+            ? 0
+            : Number(discount_percent);
+
         if (
             !medicine_name ||
             price === undefined ||
             quantity === undefined ||
-            Number(price) < 0 ||
+            Number(price) <= 0 ||
             Number(quantity) < 0 ||
             !Number.isFinite(Number(price)) ||
-            !Number.isInteger(Number(quantity))
+            !Number.isInteger(Number(quantity)) ||
+            !Number.isFinite(discount) ||
+            discount < 0 ||
+            discount > 100
         ) {
             return res.status(400).json({
-                message: "Please provide valid medicine details."
+                message: "Please provide valid medicine details (discount must be 0–100%)."
             });
         }
 
+        await ensureSchemaUpgrades();
+
         const [result] = await db.query(
             `INSERT INTO medicines
-            (medicine_name, category, price, quantity,
+            (medicine_name, category, price, discount_percent, quantity,
              reorder_level, expiry_date, batch_number)
-            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 medicine_name.trim(),
                 category || null,
                 Number(price),
+                Number(discount.toFixed(2)),
                 Number(quantity),
                 Number(reorder_level ?? 10),
                 expiry_date || null,
@@ -121,9 +203,7 @@ app.post("/api/medicines", async (req, res) => {
         });
     } catch (error) {
         console.error("Add medicine error:", error.message);
-        res.status(500).json({
-            message: "Unable to add medicine."
-        });
+        sendDbError(res, error, "Unable to add medicine.");
     }
 });
 
@@ -135,29 +215,39 @@ app.put("/api/medicines/:id", async (req, res) => {
             medicine_name,
             category,
             price,
+            discount_percent,
             quantity,
             reorder_level,
             expiry_date,
             batch_number
         } = req.body;
 
+        const discount = discount_percent === undefined || discount_percent === ""
+            ? 0
+            : Number(discount_percent);
+
         if (
             !medicine_name ||
             price === undefined ||
             quantity === undefined ||
-            Number(price) < 0 ||
+            Number(price) <= 0 ||
             Number(quantity) < 0 ||
             !Number.isFinite(Number(price)) ||
-            !Number.isInteger(Number(quantity))
+            !Number.isInteger(Number(quantity)) ||
+            !Number.isFinite(discount) ||
+            discount < 0 ||
+            discount > 100
         ) {
             return res.status(400).json({
-                message: "Please provide valid medicine details."
+                message: "Please provide valid medicine details (discount must be 0–100%)."
             });
         }
 
+        await ensureSchemaUpgrades();
+
         const [result] = await db.query(
             `UPDATE medicines
-             SET medicine_name = ?, category = ?, price = ?,
+             SET medicine_name = ?, category = ?, price = ?, discount_percent = ?,
                  quantity = ?, reorder_level = ?, expiry_date = ?,
                  batch_number = ?
              WHERE medicine_id = ?`,
@@ -165,6 +255,7 @@ app.put("/api/medicines/:id", async (req, res) => {
                 medicine_name.trim(),
                 category || null,
                 Number(price),
+                Number(discount.toFixed(2)),
                 Number(quantity),
                 Number(reorder_level ?? 10),
                 expiry_date || null,
@@ -182,9 +273,7 @@ app.put("/api/medicines/:id", async (req, res) => {
         res.json({ message: "Medicine updated successfully." });
     } catch (error) {
         console.error("Update medicine error:", error.message);
-        res.status(500).json({
-            message: "Unable to update medicine."
-        });
+        sendDbError(res, error, "Unable to update medicine.");
     }
 });
 
@@ -205,9 +294,11 @@ app.delete("/api/medicines/:id", async (req, res) => {
         res.json({ message: "Medicine deleted successfully." });
     } catch (error) {
         console.error("Delete medicine error:", error.message);
-        res.status(500).json({
-            message: "Unable to delete medicine. It may have related sales or purchases."
-        });
+        sendDbError(
+            res,
+            error,
+            "Unable to delete medicine. It may have related sales or purchases."
+        );
     }
 });
 
@@ -217,15 +308,19 @@ app.delete("/api/medicines/:id", async (req, res) => {
 // Get sales history
 app.get("/api/sales", async (req, res) => {
     try {
+        await ensureSchemaUpgrades();
         const [rows] = await db.query(`
             SELECT
                 s.sale_id,
                 s.total_amount,
+                s.cashier_name,
                 s.sale_date,
                 si.medicine_id,
                 m.medicine_name,
                 si.quantity,
+                si.original_price,
                 si.unit_price,
+                si.discount_percent,
                 si.subtotal
             FROM sales s
             JOIN sale_items si ON si.sale_id = s.sale_id
@@ -236,18 +331,16 @@ app.get("/api/sales", async (req, res) => {
         res.json(rows);
     } catch (error) {
         console.error("Get sales error:", error.message);
-        res.status(500).json({
-            message: "Unable to retrieve sales."
-        });
+        sendDbError(res, error, "Unable to retrieve sales.");
     }
 });
 
 // Create a sale and deduct stock safely
 app.post("/api/sales", async (req, res) => {
-    const connection = await db.getConnection();
+    let connection;
 
     try {
-        const { medicine_id, quantity } = req.body;
+        const { medicine_id, quantity, discount_percent, cashier_name } = req.body;
         const medicineId = Number(medicine_id);
         const qty = Number(quantity);
 
@@ -261,6 +354,18 @@ app.post("/api/sales", async (req, res) => {
                 message: "Enter a valid medicine and quantity."
             });
         }
+
+        if (discount_percent !== undefined && discount_percent !== "") {
+            const parsedDiscount = Number(discount_percent);
+            if (!Number.isFinite(parsedDiscount) || parsedDiscount < 0 || parsedDiscount > 100) {
+                return res.status(400).json({
+                    message: "Discount must be between 0% and 100%."
+                });
+            }
+        }
+
+        await ensureSchemaUpgrades();
+        connection = await db.getConnection();
 
         await connection.beginTransaction();
 
@@ -285,19 +390,33 @@ app.post("/api/sales", async (req, res) => {
             });
         }
 
-        const unitPrice = Number(medicine.price);
+        const originalPrice = Number(medicine.price);
+        let discountPercent = discount_percent !== undefined && discount_percent !== ""
+            ? Number(discount_percent)
+            : Number(medicine.discount_percent || 0);
+
+        if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
+            await connection.rollback();
+            return res.status(400).json({
+                message: "Discount must be between 0% and 100%."
+            });
+        }
+
+        discountPercent = Number(discountPercent.toFixed(2));
+        const unitPrice = Number((originalPrice * (1 - discountPercent / 100)).toFixed(2));
         const subtotal = Number((unitPrice * qty).toFixed(2));
+        const cashierLabel = String(cashier_name || "Admin").trim().slice(0, 120) || "Admin";
 
         const [saleResult] = await connection.query(
-            "INSERT INTO sales (total_amount) VALUES (?)",
-            [subtotal]
+            "INSERT INTO sales (total_amount, cashier_name) VALUES (?, ?)",
+            [subtotal, cashierLabel]
         );
 
         await connection.query(
             `INSERT INTO sale_items
-             (sale_id, medicine_id, quantity, unit_price, subtotal)
-             VALUES (?, ?, ?, ?, ?)`,
-            [saleResult.insertId, medicineId, qty, unitPrice, subtotal]
+             (sale_id, medicine_id, quantity, original_price, unit_price, discount_percent, subtotal)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [saleResult.insertId, medicineId, qty, originalPrice, unitPrice, discountPercent, subtotal]
         );
 
         await connection.query(
@@ -312,18 +431,23 @@ app.post("/api/sales", async (req, res) => {
         res.status(201).json({
             message: "Sale completed successfully.",
             sale_id: saleResult.insertId,
-            total_amount: subtotal
+            original_price: originalPrice,
+            unit_price: unitPrice,
+            discount_percent: discountPercent,
+            total_amount: subtotal,
+            cashier_name: cashierLabel
         });
     } catch (error) {
-        await connection.rollback();
+        if (connection) {
+            try { await connection.rollback(); } catch {}
+        }
 
         console.error("Create sale error:", error.message);
-
-        res.status(500).json({
-            message: "Unable to complete sale."
-        });
+        sendDbError(res, error, "Unable to complete sale.");
     } finally {
-        connection.release();
+        if (connection) {
+            connection.release();
+        }
     }
 });
 
@@ -356,17 +480,17 @@ app.get("/api/purchases", async (req, res) => {
         res.json(rows);
     } catch (error) {
         console.error("Get purchases error:", error.message);
-        res.status(500).json({
-            message: "Unable to retrieve purchases."
-        });
+        sendDbError(res, error, "Unable to retrieve purchases.");
     }
 });
 
 // Create purchase; stock is not changed until Received
 app.post("/api/purchases", async (req, res) => {
-    const connection = await db.getConnection();
+    let connection;
 
     try {
+        connection = await db.getConnection();
+
         const {
             medicine_id,
             supplier_name,
@@ -444,22 +568,24 @@ app.post("/api/purchases", async (req, res) => {
             purchase_id: purchaseResult.insertId
         });
     } catch (error) {
-        await connection.rollback();
+        if (connection) {
+            try { await connection.rollback(); } catch {}
+        }
         console.error("Create purchase error:", error.message);
-
-        res.status(500).json({
-            message: "Unable to save purchase."
-        });
+        sendDbError(res, error, "Unable to save purchase.");
     } finally {
-        connection.release();
+        if (connection) {
+            connection.release();
+        }
     }
 });
 
 // Change purchase status to Received and add stock once
 app.patch("/api/purchases/:id/receive", async (req, res) => {
-    const connection = await db.getConnection();
+    let connection;
 
     try {
+        connection = await db.getConnection();
         await connection.beginTransaction();
 
         const [purchases] = await connection.query(
@@ -504,14 +630,15 @@ app.patch("/api/purchases/:id/receive", async (req, res) => {
             message: "Purchase received and stock updated."
         });
     } catch (error) {
-        await connection.rollback();
+        if (connection) {
+            try { await connection.rollback(); } catch {}
+        }
         console.error("Receive purchase error:", error.message);
-
-        res.status(500).json({
-            message: "Unable to receive purchase."
-        });
+        sendDbError(res, error, "Unable to receive purchase.");
     } finally {
-        connection.release();
+        if (connection) {
+            connection.release();
+        }
     }
 });
 
@@ -526,9 +653,7 @@ app.get("/api/suppliers", async (req, res) => {
         res.json(rows);
     } catch (error) {
         console.error("Load suppliers error:", error);
-        res.status(500).json({
-            message: "Failed to load suppliers."
-        });
+        sendDbError(res, error, "Failed to load suppliers.");
     }
 });
 
@@ -570,9 +695,7 @@ app.post("/api/suppliers", async (req, res) => {
         });
     } catch (error) {
         console.error("Add supplier error:", error);
-        res.status(500).json({
-            message: "Failed to add supplier."
-        });
+        sendDbError(res, error, "Failed to add supplier.");
     }
 });
 
@@ -625,9 +748,7 @@ app.put("/api/suppliers/:id", async (req, res) => {
         });
     } catch (error) {
         console.error("Update supplier error:", error);
-        res.status(500).json({
-            message: "Failed to update supplier."
-        });
+        sendDbError(res, error, "Failed to update supplier.");
     }
 });
 
@@ -650,10 +771,11 @@ app.delete("/api/suppliers/:id", async (req, res) => {
         });
     } catch (error) {
         console.error("Delete supplier error:", error);
-
-        res.status(500).json({
-            message: "Unable to delete supplier. It may be linked to existing purchases."
-        });
+        sendDbError(
+            res,
+            error,
+            "Unable to delete supplier. It may be linked to existing purchases."
+        );
     }
 });
 
@@ -678,6 +800,7 @@ const DEFAULT_SETTINGS = {
     pharmacyLogo: "",
     adminName: "Admin",
     adminEmail: "admin@example.com",
+    cashierName: "Cashier",
     dateFormat: "MM/DD/YYYY",
     lowStockLevel: 10
 };
@@ -762,6 +885,7 @@ function normalizeSettings(raw = {}) {
 
     merged.adminName = String(merged.adminName || "").trim() || DEFAULT_SETTINGS.adminName;
     merged.adminEmail = String(merged.adminEmail || "").trim();
+    merged.cashierName = String(merged.cashierName || "").trim() || DEFAULT_SETTINGS.cashierName;
     merged.dateFormat = ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD"].includes(merged.dateFormat)
         ? merged.dateFormat
         : DEFAULT_SETTINGS.dateFormat;
@@ -792,11 +916,25 @@ async function ensureSettingsTable() {
             pharmacy_logo LONGTEXT NULL,
             admin_name VARCHAR(120) DEFAULT 'Admin',
             admin_email VARCHAR(150) DEFAULT 'admin@example.com',
+            cashier_name VARCHAR(120) DEFAULT 'Cashier',
             date_format VARCHAR(30) DEFAULT 'MM/DD/YYYY',
             low_stock_level INT DEFAULT 10,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
     `);
+
+    const dbName = process.env.DB_NAME || "epharma_db";
+    const [cols] = await db.query(
+        `SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'pharmacy_settings' AND COLUMN_NAME = 'cashier_name'`,
+        [dbName]
+    );
+    if (cols.length === 0) {
+        await db.query(
+            "ALTER TABLE pharmacy_settings ADD COLUMN cashier_name VARCHAR(120) DEFAULT 'Cashier' AFTER admin_email"
+        );
+    }
 }
 
 async function readSettingsFromFile() {
@@ -845,6 +983,7 @@ async function readStoredSettings() {
                     pharmacyLogo: row.pharmacy_logo || "",
                     adminName: row.admin_name,
                     adminEmail: row.admin_email,
+                    cashierName: row.cashier_name,
                     dateFormat: row.date_format,
                     lowStockLevel: row.low_stock_level
                 })
@@ -920,8 +1059,8 @@ async function handleSaveSettings(req, res) {
                     setting_id, pharmacy_name, pharmacy_email, pharmacy_phone,
                     address_street, address_barangay, address_city, address_province,
                     address_postal_code, address_country, address_landmark, pharmacy_address,
-                    pharmacy_logo, admin_name, admin_email, date_format, low_stock_level
-                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    pharmacy_logo, admin_name, admin_email, cashier_name, date_format, low_stock_level
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON DUPLICATE KEY UPDATE
                     pharmacy_name = VALUES(pharmacy_name),
                     pharmacy_email = VALUES(pharmacy_email),
@@ -937,6 +1076,7 @@ async function handleSaveSettings(req, res) {
                     pharmacy_logo = VALUES(pharmacy_logo),
                     admin_name = VALUES(admin_name),
                     admin_email = VALUES(admin_email),
+                    cashier_name = VALUES(cashier_name),
                     date_format = VALUES(date_format),
                     low_stock_level = VALUES(low_stock_level)`,
                 [
@@ -954,6 +1094,7 @@ async function handleSaveSettings(req, res) {
                     updated.pharmacyLogo,
                     updated.adminName,
                     updated.adminEmail,
+                    updated.cashierName,
                     updated.dateFormat,
                     updated.lowStockLevel
                 ]

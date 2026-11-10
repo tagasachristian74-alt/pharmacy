@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS medicines (
     medicine_name VARCHAR(150) NOT NULL,
     category VARCHAR(100),
     price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0.00,
     quantity INT NOT NULL DEFAULT 0,
     reorder_level INT NOT NULL DEFAULT 10,
     expiry_date DATE NULL,
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS suppliers (
 CREATE TABLE IF NOT EXISTS sales (
     sale_id INT AUTO_INCREMENT PRIMARY KEY,
     total_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    cashier_name VARCHAR(120) DEFAULT 'Admin',
     sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -40,7 +42,9 @@ CREATE TABLE IF NOT EXISTS sale_items (
     sale_id INT NOT NULL,
     medicine_id INT NOT NULL,
     quantity INT NOT NULL,
+    original_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     unit_price DECIMAL(10,2) NOT NULL,
+    discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0.00,
     subtotal DECIMAL(10,2) NOT NULL,
     FOREIGN KEY (sale_id) REFERENCES sales(sale_id),
     FOREIGN KEY (medicine_id) REFERENCES medicines(medicine_id)
@@ -85,6 +89,7 @@ CREATE TABLE IF NOT EXISTS pharmacy_settings (
     pharmacy_logo LONGTEXT NULL,
     admin_name VARCHAR(120) DEFAULT 'Admin',
     admin_email VARCHAR(150) DEFAULT 'admin@example.com',
+    cashier_name VARCHAR(120) DEFAULT 'Cashier',
     date_format VARCHAR(30) DEFAULT 'MM/DD/YYYY',
     low_stock_level INT DEFAULT 10,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP

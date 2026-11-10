@@ -2,6 +2,7 @@
 
 (function (global) {
     const STORAGE_KEY = "epharmaSettings";
+    const SESSION_KEY = "epharmaSession";
     const DEFAULT_LOGO_PATH = "assets/default-logo.svg";
 
     const DEFAULT_SETTINGS = {
@@ -19,9 +20,48 @@
         pharmacyLogo: "",
         adminName: "Admin",
         adminEmail: "admin@example.com",
+        cashierName: "Cashier",
         dateFormat: "MM/DD/YYYY",
         lowStockLevel: 10
     };
+
+    function getActiveSession() {
+        try {
+            const raw = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed && (parsed.role === "admin" || parsed.role === "cashier")) {
+                    return parsed;
+                }
+            }
+        } catch {
+            // Ignore parse errors.
+        }
+        return { role: "admin", username: "admin" };
+    }
+
+    function setActiveSession(session) {
+        const clean = {
+            role: session && session.role === "cashier" ? "cashier" : "admin",
+            username: String((session && session.username) || "admin")
+        };
+        try {
+            sessionStorage.setItem(SESSION_KEY, JSON.stringify(clean));
+            localStorage.setItem(SESSION_KEY, JSON.stringify(clean));
+        } catch {
+            // Ignore storage errors.
+        }
+        return clean;
+    }
+
+    function clearActiveSession() {
+        try {
+            sessionStorage.removeItem(SESSION_KEY);
+            localStorage.removeItem(SESSION_KEY);
+        } catch {
+            // Ignore storage errors.
+        }
+    }
 
     function formatAddress(settings) {
         const s = settings || {};
@@ -110,6 +150,7 @@
 
         merged.adminName = String(merged.adminName || "").trim() || DEFAULT_SETTINGS.adminName;
         merged.adminEmail = String(merged.adminEmail || "").trim();
+        merged.cashierName = String(merged.cashierName || "").trim() || DEFAULT_SETTINGS.cashierName;
         merged.dateFormat = String(merged.dateFormat || DEFAULT_SETTINGS.dateFormat);
 
         const lowStock = Number(merged.lowStockLevel);
@@ -244,28 +285,56 @@
                 : "Pharmacy Management · 2026";
         }
 
-        // Dashboard admin profile labels.
-        const adminName = settings.adminName || "Admin";
-        const adminInitial = adminName.charAt(0).toUpperCase() || "A";
+        // Dashboard active user profile & role labels.
+        const session = getActiveSession();
+        const isCashier = session.role === "cashier";
+        const displayName = isCashier
+            ? (settings.cashierName || "Cashier")
+            : (settings.adminName || "Admin");
+        const roleSubtitle = isCashier ? "POS Cashier" : "Administrator";
+        const userInitial = displayName.charAt(0).toUpperCase() || (isCashier ? "C" : "A");
+
+        if (document.body && !isLoginPage) {
+            document.body.dataset.userRole = session.role;
+        }
 
         const sidebarAdminName = document.getElementById("sidebarAdminName");
         if (sidebarAdminName) {
-            sidebarAdminName.textContent = adminName === "Admin" ? "Administrator" : adminName;
+            sidebarAdminName.textContent = !isCashier && displayName === "Admin"
+                ? "Administrator"
+                : displayName;
+        }
+
+        const sidebarRoleLabel = document.getElementById("sidebarRoleLabel");
+        if (sidebarRoleLabel) {
+            sidebarRoleLabel.textContent = isCashier ? "Cashier Account" : "Pharmacy Admin";
         }
 
         const topbarAdminName = document.getElementById("topbarAdminName");
         if (topbarAdminName) {
-            topbarAdminName.textContent = adminName;
+            topbarAdminName.textContent = displayName;
+        }
+
+        const topbarRoleLabel = document.getElementById("topbarRoleLabel");
+        if (topbarRoleLabel) {
+            topbarRoleLabel.textContent = roleSubtitle;
+        }
+
+        const topbarRoleBadge = document.getElementById("topbarRoleBadge");
+        if (topbarRoleBadge) {
+            topbarRoleBadge.textContent = isCashier ? "Cashier" : "Admin";
+            topbarRoleBadge.classList.toggle("role-badge--cashier", isCashier);
+            topbarRoleBadge.classList.toggle("role-badge--admin", !isCashier);
         }
 
         const sidebarAdminAvatar = document.getElementById("sidebarAdminAvatar");
         if (sidebarAdminAvatar) {
-            sidebarAdminAvatar.textContent = adminInitial;
+            sidebarAdminAvatar.textContent = userInitial;
         }
 
         const topbarAdminAvatar = document.getElementById("topbarAdminAvatar");
         if (topbarAdminAvatar) {
-            topbarAdminAvatar.textContent = adminInitial;
+            topbarAdminAvatar.textContent = userInitial;
         }
 
         // Login page desktop & mobile branding.
@@ -474,7 +543,10 @@
         applyBranding,
         syncFromServer,
         saveSettings,
-        processLogoFile
+        processLogoFile,
+        getActiveSession,
+        setActiveSession,
+        clearActiveSession
     };
 
     if (document.readyState === "loading") {
