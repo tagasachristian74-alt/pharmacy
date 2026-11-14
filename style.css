@@ -126,7 +126,7 @@ body {
 }
 
 .brand-message {
-    margin-top: 100px;
+    margin-top: 24px;
     max-width: 390px;
 }
 
@@ -144,7 +144,7 @@ body {
 
 .brand-footer {
     display: block;
-    margin-top: 90px;
+    margin-top: 28px;
     color: #83B6BC;
     font-size: 12px;
     letter-spacing: 1px;
@@ -534,3 +534,4 @@ body {
         font-size: 24px;
     }
 }
+.login-hero-img { display: block; width: min(100%, 280px); max-height: 230px; object-fit: cover; border-radius: 16px; border: 1px solid rgba(143,212,203,.18); margin-top: 24px; }

@@ -61,3 +61,7 @@ Purchases must use an existing **Active** supplier; create a supplier under Supp
 The Sales report and its CSV include Senior/PWD customer names and ID numbers. Treat exports and printed receipts as sensitive personal data; restrict and secure access. View / Reprint shows a past record, including its void status. Cash tendered and change are not stored, so a reprinted past receipt cannot show those details.
 
 Plaintext stored passwords are no longer accepted. Accounts created by this version use scrypt hashes. If upgrading an old database containing plaintext passwords, make a backup and have an administrator reset those accounts securely before use; do not post passwords or database contents in support requests.
+
+## V9 picture assets
+
+The `assets/` folder includes the supplied picture set. The login, role avatars, Rx callout, notification empty state and available category icons use these images. Vitamins and Maintenance icons were not in the supplied folder, so those categories retain text labels. Feature, alert and cover images are included for future use. To use the supplied pharmacy logo throughout the app, upload `assets/pharmacy-logo.png` in Settings; this does not overwrite an existing custom logo.

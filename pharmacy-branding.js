@@ -371,15 +371,16 @@
             topbarRoleBadge.classList.toggle("role-badge--admin", !isCashier);
         }
 
-        const sidebarAdminAvatar = document.getElementById("sidebarAdminAvatar");
-        if (sidebarAdminAvatar) {
-            sidebarAdminAvatar.textContent = userInitial;
-        }
-
-        const topbarAdminAvatar = document.getElementById("topbarAdminAvatar");
-        if (topbarAdminAvatar) {
-            topbarAdminAvatar.textContent = userInitial;
-        }
+        ["sidebarAdminAvatar", "topbarAdminAvatar"].forEach(function (id) {
+            const avatar = document.getElementById(id);
+            if (!avatar) return;
+            avatar.textContent = userInitial;
+            const image = document.createElement("img");
+            image.alt = "";
+            image.onerror = function () { image.remove(); };
+            image.src = isCashier ? "assets/avatar-cashier.png" : "assets/avatar-admin.png";
+            avatar.appendChild(image);
+        });
 
         // Login page desktop & mobile branding.
         applyLogoToElement(

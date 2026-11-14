@@ -803,7 +803,7 @@ sales: `
             </div>
 
             <div class="form-field form-full" id="rxVerificationField" hidden>
-                <label><input type="checkbox" id="salesRxVerified"> Prescription verified</label>
+                <label class="rx-image-callout"><img src="assets/badge-rx.png" alt="" onerror="this.hidden=true"><span><strong>Prescription required (Rx)</strong><br><input type="checkbox" id="salesRxVerified"> Prescription verified</span></label>
             </div>
             <div class="form-field">
                 <label for="salesQuantity">Quantity *</label>
@@ -1942,7 +1942,22 @@ function renderInventory() {
         row.appendChild(nameCell);
 
         const categoryCell = document.createElement("td");
-        categoryCell.textContent = medicine.category || "-";
+        const categoryIcons = {
+            "pain reliever": "cat-pain-reliever.png",
+            "antibiotic": "cat-antibiotic.png",
+            "antihistamine": "cat-antihistamine.png",
+            "other": "cat-other.png"
+        };
+        const iconName = categoryIcons[String(medicine.category || "").toLowerCase()];
+        if (iconName) {
+            const icon = document.createElement("img");
+            icon.className = "category-image";
+            icon.alt = "";
+            icon.onerror = function () { icon.remove(); };
+            icon.src = "assets/" + iconName;
+            categoryCell.appendChild(icon);
+        }
+        categoryCell.appendChild(document.createTextNode(medicine.category || "-"));
         row.appendChild(categoryCell);
 
         const priceCell = document.createElement("td");
@@ -4951,6 +4966,7 @@ function renderNotifications() {
     if (notifications.length === 0) {
         list.innerHTML = `
             <div class="notification-empty">
+                <img class="healthy-stock-image" src="assets/empty-stock-ok.png" alt="" onerror="this.hidden=true">
                 <p>No alerts right now.</p>
             </div>
         `;
