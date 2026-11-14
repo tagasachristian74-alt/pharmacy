@@ -110,6 +110,7 @@ function completeLogin(user) {
             username: user.username,
             fullName: user.fullName || user.full_name || user.username,
             email: user.email || "",
+            avatar: user.avatar || "",
             role: user.role
         });
     } else {

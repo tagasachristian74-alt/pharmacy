@@ -1115,3 +1115,7 @@ td small {
 .notification-item:hover, .notification-item:focus-visible { background: #e9f8f5; outline: 2px solid #079b89; outline-offset: -2px; }
 .notification-highlight { animation: notification-pulse 3s ease-out; }
 @keyframes notification-pulse { 0%, 50% { background: #fff2bc; } 100% { background: transparent; } }
+
+.profile-photo-preview { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; }
+.table-profile-photo { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; vertical-align: middle; }
+.avatar img { border-radius: 50%; object-fit: cover; }

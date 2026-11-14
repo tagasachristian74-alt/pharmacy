@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash VARCHAR(255) NOT NULL,
     full_name VARCHAR(120) NOT NULL,
     email VARCHAR(150) DEFAULT '',
+    avatar_data LONGTEXT NULL,
     role ENUM('admin', 'cashier') NOT NULL DEFAULT 'cashier',
     status ENUM('Active', 'Inactive') NOT NULL DEFAULT 'Active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

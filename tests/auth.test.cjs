@@ -89,6 +89,24 @@ test('purchase requires an existing active supplier and expired medicines cannot
   assert.equal(response.status,400); assert.match((await response.json()).message,/expired/i);
 });
 
+test('profile photo validation, persistence and reset for current user', async () => {
+  const cookie = await login('cashier','test-cashier-password');
+  const headers = {cookie, 'content-type':'application/json'};
+  const url = '/api/account/profile';
+  const avatar = 'data:image/png;base64,YQ==';
+  const update = data => req(url,{method:'PUT',headers,body:JSON.stringify({fullName:'Cashier',...data})});
+  let response = await update({avatar_data:avatar});
+  assert.equal(response.status,200); assert.equal((await response.json()).user.avatar,avatar);
+  assert.equal((await (await req('/api/auth/session',{headers})).json()).user.avatar,avatar);
+  const admin = await login('admin','test-admin-password');
+  const listed = await (await req('/api/users',{headers:{cookie:admin}})).json();
+  assert.equal(listed.find(u=>u.username==='cashier').avatar,avatar);
+  assert.equal((await req('/api/users/2',{method:'PUT',headers:{cookie:admin,'content-type':'application/json'},body:JSON.stringify({full_name:'Cashier',avatar_data:'javascript:bad'})})).status,400);
+  assert.equal((await update({avatar_data:'data:image/svg+xml;base64,PHN2Zz4='})).status,400);
+  assert.equal((await update({avatar_data:'data:image/png;base64,' + 'A'.repeat(140001)})).status,400);
+  response = await update({avatar_data:''}); assert.equal(response.status,200); assert.equal((await response.json()).user.avatar,'');
+});
+
 // Deletion revokes every session, not only the session used for the request.
 test('deleting an account invalidates all its active sessions', async () => {
   const first = await login('cashier','test-cashier-password');

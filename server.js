@@ -148,12 +148,18 @@ async function performSchemaUpgrades() {
             password_hash VARCHAR(255) NOT NULL,
             full_name VARCHAR(120) NOT NULL,
             email VARCHAR(150) DEFAULT '',
+            avatar_data LONGTEXT NULL,
             role ENUM('admin', 'cashier') NOT NULL DEFAULT 'cashier',
             status ENUM('Active', 'Inactive') NOT NULL DEFAULT 'Active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
     `);
+
+    const [avatarColumns] = await db.query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar_data'", [dbName]
+    );
+    if (avatarColumns.length === 0) await db.query("ALTER TABLE users ADD COLUMN avatar_data LONGTEXT NULL");
 
     await db.query(`
         CREATE TABLE IF NOT EXISTS activity_logs (
@@ -239,7 +245,7 @@ app.use("/api", async (req, res, next) => {
     }
     if (req.path === "/auth/logout" && req.method === "POST") { req.session = session; return next(); }
     try {
-        const [rows] = await db.query("SELECT user_id, username, full_name, email, role, status, password_hash FROM users WHERE user_id = ? LIMIT 1", [session.userId]);
+        const [rows] = await db.query("SELECT user_id, username, full_name, email, role, status, password_hash, avatar_data FROM users WHERE user_id = ? LIMIT 1", [session.userId]);
         const user = rows[0];
         if (!user || user.status !== "Active" || user.password_hash !== session.passwordHash) {
             sessions.delete(token);
@@ -260,7 +266,7 @@ app.use("/api", async (req, res, next) => {
 });
 app.get("/api/auth/session", (req, res) => res.json({ user: {
     user_id: req.user.user_id, username: req.user.username, fullName: req.user.full_name,
-    email: req.user.email || "", role: req.user.role
+    email: req.user.email || "", role: req.user.role, avatar: req.user.avatar_data || ""
 } }));
 app.post("/api/auth/logout", async (req, res) => {
     sessions.delete(cookieToken(req));
@@ -1220,6 +1226,13 @@ function isSafeLogoValue(value) {
     return false;
 }
 
+// Avatars are smaller and stricter than pharmacy logos: raster data only.
+function isSafeAvatarValue(value) {
+    if (value === "") return true;
+    return typeof value === "string" && value.length <= 140000 &&
+        /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/i.test(value) && isSafeLogoValue(value);
+}
+
 function normalizeSettings(raw = {}) {
     const merged = {
         ...DEFAULT_SETTINGS,
@@ -1509,7 +1522,7 @@ app.post("/api/auth/login", async (req, res) => {
         await ensureSchemaUpgrades();
 
         const [rows] = await db.query(
-            `SELECT user_id, username, password_hash, full_name, email, role, status
+            `SELECT user_id, username, password_hash, full_name, email, role, status, avatar_data
              FROM users
              WHERE username = ?
              LIMIT 1`,
@@ -1550,7 +1563,8 @@ app.post("/api/auth/login", async (req, res) => {
                 fullName: user.full_name,
                 email: user.email || "",
                 role: user.role,
-                status: user.status
+                status: user.status,
+                avatar: user.avatar_data || ""
             }
         });
     } catch (error) {
@@ -1565,6 +1579,8 @@ app.put("/api/account/profile", async (req, res) => {
         const username = String(req.body?.username || "").trim();
         const fullName = String(req.body?.fullName ?? req.body?.full_name ?? "").trim();
         const email = String(req.body?.email || "").trim();
+        const avatar = req.body?.avatar_data;
+        if (avatar !== undefined && !isSafeAvatarValue(avatar)) return res.status(400).json({ message: "Invalid or oversized profile photo." });
 
         if (!username || !fullName) {
             return res.status(400).json({
@@ -1588,6 +1604,8 @@ app.put("/api/account/profile", async (req, res) => {
             [fullName.slice(0, 120), email.slice(0, 150), user.user_id]
         );
 
+        if (avatar !== undefined) await db.query("UPDATE users SET avatar_data = ? WHERE user_id = ?", [avatar || null, user.user_id]);
+
         await recordActivityLog({
             username: user.username,
             actor_name: fullName,
@@ -1605,7 +1623,8 @@ app.put("/api/account/profile", async (req, res) => {
                 username: user.username,
                 fullName,
                 email,
-                role: user.role
+                role: user.role,
+                avatar: avatar === undefined ? (req.user.avatar_data || "") : avatar
             }
         });
     } catch (error) {
@@ -1681,7 +1700,7 @@ app.get("/api/users", async (req, res) => {
     try {
         await ensureSchemaUpgrades();
         const [rows] = await db.query(
-            `SELECT user_id, username, full_name, email, role, status, created_at
+            `SELECT user_id, username, full_name, email, role, status, created_at, avatar_data AS avatar
              FROM users
              ORDER BY role ASC, user_id ASC`
         );
@@ -1706,6 +1725,8 @@ app.post("/api/users", async (req, res) => {
         const password = String(req.body?.password || "");
         const role = req.body?.role === "admin" ? "admin" : "cashier";
         const status = req.body?.status === "Inactive" ? "Inactive" : "Active";
+        const avatar = req.body?.avatar_data ?? "";
+        if (!isSafeAvatarValue(avatar)) return res.status(400).json({ message: "Invalid or oversized profile photo." });
 
         if (!username || !fullName || password.length < 12) {
             return res.status(400).json({
@@ -1732,9 +1753,9 @@ app.post("/api/users", async (req, res) => {
         }
 
         const [result] = await db.query(
-            `INSERT INTO users (username, password_hash, full_name, email, role, status)
-             VALUES (?, ?, ?, ?, ?, ?)`,
-            [username, hashPassword(password), fullName, email, role, status]
+            `INSERT INTO users (username, password_hash, full_name, email, role, status, avatar_data)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [username, hashPassword(password), fullName, email, role, status, avatar || null]
         );
 
         await recordActivityLog({
@@ -1764,6 +1785,8 @@ app.put("/api/users/:id", async (req, res) => {
         const email = String(req.body?.email || "").trim();
         const status = req.body?.status === "Inactive" ? "Inactive" : "Active";
         const newPassword = String(req.body?.password || "");
+        const avatar = req.body?.avatar_data;
+        if (avatar !== undefined && !isSafeAvatarValue(avatar)) return res.status(400).json({ message: "Invalid or oversized profile photo." });
 
         if (!Number.isInteger(id) || id <= 0 || !fullName) {
             return res.status(400).json({
@@ -1802,6 +1825,7 @@ app.put("/api/users/:id", async (req, res) => {
             );
         }
 
+        if (avatar !== undefined) await db.query("UPDATE users SET avatar_data = ? WHERE user_id = ?", [avatar || null, id]);
         if (newPassword || status === "Inactive") {
             for (const [token, session] of sessions) if (session.userId === id) sessions.delete(token);
         }

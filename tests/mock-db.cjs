@@ -15,7 +15,7 @@ const query = async (sql, values = []) => {
   if (sql.includes('SELECT COUNT(*) AS cnt FROM users')) return [[{cnt:users.length}]];
   if (sql.includes('FROM users') && sql.includes('WHERE username')) return [users.filter(u => u.username === values[0])];
   if (sql.includes('FROM users') && sql.includes('WHERE user_id')) return [users.filter(u => u.user_id === values[0])];
-  if (sql.includes('FROM users') && sql.includes('ORDER BY role')) return [users];
+  if (sql.includes('FROM users') && sql.includes('ORDER BY role')) return [users.map(u => ({...u, avatar:u.avatar_data || ''}))];
   if (sql.includes('FROM sales s')) {
     const visible = sales.filter(s => !values.length || (sql.includes('WHERE s.cashier_id = ?') ? s.cashier_id === values[0] : s.cashier_username === values[0]));
     return [visible.map(s => ({...s, medicine_name:medicine.medicine_name}))];
@@ -26,6 +26,7 @@ const query = async (sql, values = []) => {
   if (sql.includes('SELECT medicine_id FROM medicines')) return [[{medicine_id:1}]];
   if (sql.includes('SELECT supplier_id, supplier_name FROM suppliers')) return [suppliers.filter(s => s.status === 'Active' && (s.supplier_id === values[0] || s.supplier_name === values[0]))];
   if (sql.includes('DELETE FROM users WHERE user_id = ?')) { const i=users.findIndex(u=>u.user_id===values[0]); if(i>=0) users.splice(i,1); return [{affectedRows:i>=0?1:0}]; }
+  if (sql.includes('UPDATE users SET avatar_data = ?')) { const u=users.find(u=>u.user_id===values[1]); if(u) u.avatar_data=values[0]; return [{affectedRows:u?1:0}]; }
   if (sql.includes('UPDATE users SET full_name = ?')) { const u=users.find(u=>u.user_id===values[2]); if(u){u.full_name=values[0];u.email=values[1];} return [{affectedRows:u?1:0}]; }
   if (sql.includes('INSERT INTO sales (')) {
     const [total_amount,cashier_username,cashier_name,cashier_id,discount_type,customer_name,discount_id_number,vat_exempt_sales,discount_amount] = values;

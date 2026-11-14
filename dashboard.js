@@ -1552,6 +1552,12 @@ cashiers: `
 
         <form id="cashierForm" class="inventory-form">
             <input type="hidden" id="cashierUserId">
+            <div class="form-field form-full photo-editor">
+                <img id="cashierPhotoPreview" class="profile-photo-preview" src="assets/avatar-cashier.png" alt="Cashier photo preview">
+                <label for="cashierPhotoFile">Upload / Change Photo</label>
+                <input id="cashierPhotoFile" type="file" accept="image/png,image/jpeg,image/webp">
+                <button type="button" class="inventory-button secondary" id="cashierPhotoReset">Reset Photo</button>
+            </div>
 
             <div class="form-field">
                 <label for="cashierFullName">Full Name *</label>
@@ -1702,6 +1708,12 @@ account: `
             </div>
 
             <form id="accountProfileForm" class="inventory-form">
+                <div class="form-field form-full photo-editor">
+                    <img id="accountPhotoPreview" class="profile-photo-preview" src="assets/avatar-admin.png" alt="Profile photo preview">
+                    <label for="accountPhotoFile">Upload / Change Photo</label>
+                    <input id="accountPhotoFile" type="file" accept="image/png,image/jpeg,image/webp">
+                    <button type="button" class="inventory-button secondary" id="accountPhotoReset">Reset Photo</button>
+                </div>
                 <div class="form-field form-full">
                     <label for="accountUsername">Username</label>
                     <input id="accountUsername" type="text" readonly>
@@ -4452,7 +4464,7 @@ function renderCashiers() {
         return `
             <tr>
                 <td>USR-${String(u.user_id).padStart(3, "0")}</td>
-                <td><strong>${escapeSupplierText(u.full_name)}</strong></td>
+                <td><img class="table-profile-photo" src="${escapeSupplierText(u.avatar || (u.role === "cashier" ? "assets/avatar-cashier.png" : "assets/avatar-admin.png"))}" alt=""> <strong>${escapeSupplierText(u.full_name)}</strong></td>
                 <td>${escapeSupplierText(u.username)}</td>
                 <td><span class="badge ${u.role === "admin" ? "role-admin" : "role-cashier"}">${escapeSupplierText(u.role)}</span></td>
                 <td>${escapeSupplierText(u.email || "-")}</td>
@@ -4468,6 +4480,26 @@ function renderCashiers() {
             </tr>
         `;
     }).join("");
+}
+
+function setupPhotoEditor(prefix, initial, role, onError) {
+    const preview = document.getElementById(prefix + "PhotoPreview");
+    const file = document.getElementById(prefix + "PhotoFile");
+    const reset = document.getElementById(prefix + "PhotoReset");
+    const fallback = role === "cashier" ? "assets/avatar-cashier.png" : "assets/avatar-admin.png";
+    let value = initial || "", revision = 0, pending = false;
+    function render() { if (preview) preview.src = value || fallback; }
+    if (file) file.addEventListener("change", async function () {
+        const selected = file.files && file.files[0];
+        if (!selected) return;
+        const current = ++revision; pending = true;
+        try { const next = await window.EPharmaBranding.processAvatarFile(selected); if (current === revision) { value = next; render(); } }
+        catch (error) { if (current === revision) onError(error.message); }
+        finally { if (current === revision) pending = false; }
+    });
+    if (reset) reset.addEventListener("click", () => { revision++; pending = false; value = ""; if (file) file.value = ""; render(); });
+    render();
+    return { getValue: () => value, isPending: () => pending, setValue: next => { revision++; pending = false; value = next || ""; if (file) file.value = ""; render(); } };
 }
 
 async function initializeCashiersPage() {
@@ -4492,8 +4524,10 @@ async function initializeCashiersPage() {
     const passwordLabel = document.getElementById("cashierPasswordLabel");
     const formTitle = document.getElementById("cashierFormTitle");
 
+    const photoEditor = setupPhotoEditor("cashier", "", "cashier", message => showCashierMessage(message, true));
     function openCashierForm(user = null) {
         form.reset();
+        photoEditor.setValue(user?.avatar || "");
         if (user) {
             formTitle.textContent = `Edit Account: ${user.username}`;
             idField.value = String(user.user_id);
@@ -4527,6 +4561,7 @@ async function initializeCashiersPage() {
     form.addEventListener("submit", async function (event) {
         event.preventDefault();
         const editingId = idField.value ? Number(idField.value) : null;
+        if (photoEditor.isPending()) { showCashierMessage("Please wait for the photo to finish processing.", true); return; }
         const fullName = nameField.value.trim();
         const username = usernameField.value.trim().toLowerCase();
         const email = emailField.value.trim();
@@ -4554,7 +4589,8 @@ async function initializeCashiersPage() {
                 username,
                 email,
                 role: "cashier",
-                status
+                status,
+                avatar_data: photoEditor.getValue()
             };
             if (password) payload.password = password;
 
@@ -4794,6 +4830,7 @@ function initializeAccountPage() {
     const profileMsg = document.getElementById("accountProfileMessage");
     const passwordMsg = document.getElementById("accountPasswordMessage");
 
+    const photoEditor = setupPhotoEditor("account", session.avatar, session.role, message => setMsg(profileMsg, message, true));
     if (usernameInput) usernameInput.value = session.username || "";
     if (fullNameInput) fullNameInput.value = session.fullName || getCurrentDisplayName();
     if (emailInput) emailInput.value = session.email || "";
@@ -4813,6 +4850,7 @@ function initializeAccountPage() {
         event.preventDefault();
         const fullName = fullNameInput ? fullNameInput.value.trim() : "";
         const email = emailInput ? emailInput.value.trim() : "";
+        if (photoEditor.isPending()) { setMsg(profileMsg, "Please wait for the photo to finish processing.", true); return; }
         if (!fullName) {
             setMsg(profileMsg, "Full name is required.", true);
             return;
@@ -4825,7 +4863,8 @@ function initializeAccountPage() {
                 body: JSON.stringify({
                     username: session.username,
                     full_name: fullName,
-                    email
+                    email,
+                    avatar_data: photoEditor.getValue()
                 })
             });
             const result = await response.json().catch(() => ({}));
@@ -4860,7 +4899,8 @@ function initializeAccountPage() {
                 branding.setActiveSession({
                     ...session,
                     fullName: result.user.fullName || result.user.full_name,
-                    email: result.user.email || ""
+                    email: result.user.email || "",
+                    avatar: result.user.avatar || ""
                 });
                 branding.applyBranding();
             }

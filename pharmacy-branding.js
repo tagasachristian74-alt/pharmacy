@@ -62,6 +62,7 @@
                         username: String(parsed.username || parsed.role),
                         fullName: String(parsed.fullName || (parsed.role === "cashier" ? "Cashier" : "Administrator")),
                         email: String(parsed.email || ""),
+                        avatar: String(parsed.avatar || ""),
                         role: parsed.role
                     };
                 }
@@ -85,6 +86,7 @@
             username: String((session && session.username) || role),
             fullName: String((session && (session.fullName || session.full_name)) || (role === "cashier" ? "Cashier" : "Administrator")),
             email: String((session && session.email) || ""),
+            avatar: String((session && session.avatar) || ""),
             role
         };
         try {
@@ -378,7 +380,7 @@
             const image = document.createElement("img");
             image.alt = "";
             image.onerror = function () { image.remove(); };
-            image.src = isCashier ? "assets/avatar-cashier.png" : "assets/avatar-admin.png";
+            image.src = session.avatar || (isCashier ? "assets/avatar-cashier.png" : "assets/avatar-admin.png");
             avatar.appendChild(image);
         });
 
@@ -566,6 +568,36 @@
         });
     }
 
+    async function processAvatarFile(file) {
+        if (!file || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) throw new Error("Choose a PNG, JPG or WebP photo.");
+        if (file.size > 5 * 1024 * 1024) throw new Error("Photo must be smaller than 5 MB.");
+        const dataUrl = await readFileAsDataUrl(file);
+        return new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onerror = () => reject(new Error("Could not decode the photo."));
+            image.onload = () => {
+                try {
+                    const width = image.naturalWidth || image.width, height = image.naturalHeight || image.height;
+                    if (!width || !height) throw new Error("Invalid photo dimensions.");
+                    const side = Math.min(width, height);
+                    const canvas = document.createElement("canvas");
+                    for (let size = 256; size >= 48; size = Math.floor(size * 0.75)) {
+                        canvas.width = size; canvas.height = size;
+                        const ctx = canvas.getContext("2d");
+                        if (!ctx) throw new Error("Photo compression is not supported.");
+                        ctx.drawImage(image, (width-side)/2, (height-side)/2, side, side, 0, 0, size, size);
+                        for (const quality of [0.85, 0.7, 0.5, 0.35]) {
+                            const result = canvas.toDataURL("image/webp", quality);
+                            if (result.length <= 136500 && /^data:image\/(webp|png);base64,/.test(result)) return resolve(result);
+                        }
+                    }
+                    reject(new Error("Unable to compress this photo below 100 KB."));
+                } catch (error) { reject(error); }
+            };
+            image.src = dataUrl;
+        });
+    }
+
     global.EPharmaBranding = {
         DEFAULT_LOGO_PATH,
         DEFAULT_SETTINGS,
@@ -579,6 +611,7 @@
         syncFromServer,
         saveSettings,
         processLogoFile,
+        processAvatarFile,
         getDemoUsers,
         saveDemoUsers,
         getActiveSession,
