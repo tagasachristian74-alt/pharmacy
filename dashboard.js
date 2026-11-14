@@ -147,7 +147,10 @@ function calculateDiscountedPrice(unitPrice, discountPercent) {
 }
 
 function isServerDbUnavailable(response, payload) {
-    return (response && response.status === 503) || Boolean(payload && payload.dbUnavailable);
+    if ((response && response.status === 503) || Boolean(payload && payload.dbUnavailable)) {
+        throw new Error("Database unavailable. No changes were saved; reconnect MySQL and try again.");
+    }
+    return false;
 }
 
 let activityLogs = (function loadInitialLogs() {
@@ -574,13 +577,14 @@ if (globalSearch) {
 // =========================================
 
 if (logoutButton) {
-    logoutButton.addEventListener("click", function () {
+    logoutButton.addEventListener("click", async function () {
         const roleLabel = isCashierRole() ? "Cashier" : "Admin";
         const confirmed = confirm(
             `Log out from ${roleLabel} session and return to login?`
         );
 
         if (confirmed) {
+            await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
             recordLocalActivity("Auth", "Logged Out", `${getCurrentDisplayName()} (${getCurrentUsername()}) signed out`);
             if (window.EPharmaBranding && typeof window.EPharmaBranding.clearActiveSession === "function") {
                 window.EPharmaBranding.clearActiveSession();
@@ -774,6 +778,19 @@ const pageTemplates = {
                            step="1"
                            placeholder="10"
                            required>
+                </div>
+
+                <div class="form-field">
+                    <label for="medicineBatch">Batch Number</label>
+                    <input id="medicineBatch" maxlength="80" placeholder="e.g., BATCH-001">
+                </div>
+                <div class="form-field">
+                    <label for="medicineExpiry">Expiration Date</label>
+                    <input type="date" id="medicineExpiry">
+                </div>
+                <div class="form-field">
+                    <label for="medicineShelf">Shelf Location</label>
+                    <input id="medicineShelf" maxlength="100" placeholder="e.g., Shelf A-2">
                 </div>
 
                 <div class="form-field form-full">
@@ -1237,8 +1254,8 @@ expiration: `
             <input
                 type="text"
                 id="expirationSearch"
-                placeholder="Search medicine..."
-                aria-label="Search medicines"
+                placeholder="Search medicine, batch, or shelf..."
+                aria-label="Search medicines, batches, or shelves"
             >
         </div>
 
@@ -1250,6 +1267,8 @@ expiration: `
                 <option value="Expiring Soon">Expiring Soon</option>
                 <option value="Safe">Safe</option>
             </select>
+            <label for="expirationBefore">Expires on or before:</label>
+            <input type="date" id="expirationBefore">
         </div>
 
         <div class="table-container">
@@ -1258,6 +1277,7 @@ expiration: `
                     <tr>
                         <th>Medicine</th>
                         <th>Batch Number</th>
+                        <th>Shelf</th>
                         <th>Quantity</th>
                         <th>Expiration Date</th>
                         <th>Days Remaining</th>
@@ -1534,8 +1554,8 @@ cashiers: `
             </div>
 
             <div class="form-field form-full">
-                <label for="cashierPassword" id="cashierPasswordLabel">Password * (min 6 characters)</label>
-                <input id="cashierPassword" type="password" minlength="6" placeholder="Enter password">
+                <label for="cashierPassword" id="cashierPasswordLabel">Password * (min 12 characters)</label>
+                <input id="cashierPassword" type="password" minlength="12" placeholder="Enter password">
             </div>
 
             <div class="form-buttons">
@@ -1685,7 +1705,7 @@ account: `
             <div class="panel-heading">
                 <div>
                     <h3>Change Password</h3>
-                    <p>Use a strong password with at least 6 characters.</p>
+                    <p>Use a strong password with at least 12 characters.</p>
                 </div>
             </div>
 
@@ -1697,12 +1717,12 @@ account: `
 
                 <div class="form-field form-full">
                     <label for="accountNewPassword">New Password *</label>
-                    <input id="accountNewPassword" type="password" minlength="6" required>
+                    <input id="accountNewPassword" type="password" minlength="12" required>
                 </div>
 
                 <div class="form-field form-full">
                     <label for="accountConfirmPassword">Confirm New Password *</label>
-                    <input id="accountConfirmPassword" type="password" minlength="6" required>
+                    <input id="accountConfirmPassword" type="password" minlength="12" required>
                 </div>
 
                 <div class="form-buttons">
@@ -1843,53 +1863,7 @@ document.addEventListener("click", function (event) {
 
 let pendingPurchaseMedicineId = null;
 
-let inventoryMedicines = [
-    {
-        id: 1,
-        name: "Paracetamol 500mg",
-        category: "Pain Reliever",
-        price: 5,
-        discount: 0,
-        quantity: 5,
-        reorderLevel: 20
-    },
-    {
-        id: 2,
-        name: "Amoxicillin 500mg",
-        category: "Antibiotic",
-        price: 8,
-        discount: 0,
-        quantity: 50,
-        reorderLevel: 20
-    },
-    {
-        id: 3,
-        name: "Cetirizine 10mg",
-        category: "Antihistamine",
-        price: 12,
-        discount: 10,
-        quantity: 10,
-        reorderLevel: 15
-    },
-    {
-        id: 4,
-        name: "Ibuprofen 400mg",
-        category: "Pain Reliever",
-        price: 9,
-        discount: 0,
-        quantity: 6,
-        reorderLevel: 20
-    },
-    {
-        id: 5,
-        name: "Vitamin C 500mg",
-        category: "Vitamins",
-        price: 4,
-        discount: 20,
-        quantity: 100,
-        reorderLevel: 30
-    }
-];
+let inventoryMedicines = [];
 
 let nextMedicineId = 6;
 
@@ -2183,6 +2157,9 @@ function openMedicineForm(medicineId = null) {
         }
         document.getElementById("medicineQuantity").value = medicine.quantity;
         document.getElementById("medicineReorder").value = medicine.reorderLevel;
+        document.getElementById("medicineBatch").value = medicine.batch || "";
+        document.getElementById("medicineExpiry").value = medicine.expiry || "";
+        document.getElementById("medicineShelf").value = medicine.shelf || "";
 
         document.getElementById("medicineFormTitle").textContent =
             "Edit Medicine";
@@ -2396,7 +2373,10 @@ async function initializeInventoryPage() {
             price: price,
             discount_percent: discount,
             quantity: quantity,
-            reorder_level: reorderLevel
+            reorder_level: reorderLevel,
+            batch_number: document.getElementById("medicineBatch").value.trim(),
+            expiry_date: document.getElementById("medicineExpiry").value,
+            shelf_location: document.getElementById("medicineShelf").value.trim()
         };
 
         try {
@@ -2425,6 +2405,9 @@ async function initializeInventoryPage() {
                         existing.discount = discount;
                         existing.quantity = quantity;
                         existing.reorderLevel = reorderLevel;
+                        existing.batch = payload.batch_number;
+                        existing.expiry = payload.expiry_date;
+                        existing.shelf = payload.shelf_location;
                     }
                     recordLocalActivity("Inventory", "Updated Medicine", `Updated ${name} (₱${price.toFixed(2)}, ${discount}% off, Qty: ${quantity})`);
                 } else {
@@ -2435,7 +2418,8 @@ async function initializeInventoryPage() {
                         price,
                         discount,
                         quantity,
-                        reorderLevel
+                        reorderLevel,
+                        batch: payload.batch_number, expiry: payload.expiry_date, shelf: payload.shelf_location
                     });
                     recordLocalActivity("Inventory", "Added Medicine", `Added ${name} (₱${price.toFixed(2)}, Qty: ${quantity})`);
                 }
@@ -2581,7 +2565,7 @@ function createDemoSalesRecords() {
     ];
 }
 
-let salesRecords = createDemoSalesRecords();
+let salesRecords = [];
 let nextReceiptNumber = 7;
 
 function showSalesMessage(text, isError = false) {
@@ -3513,26 +3497,7 @@ function renderPurchaseRecords() {
         tbody.appendChild(row);
     });
 }
-let supplierRecords = [
-    {
-        id: 1,
-        name: "MedCore Pharma Distributors",
-        contact: "Elena Santos",
-        phone: "09171234567",
-        email: "orders@medcoreph.example",
-        address: "Dasmariñas City, Cavite",
-        status: "Active"
-    },
-    {
-        id: 2,
-        name: "VitaPlus Healthcare Supply",
-        contact: "Marco Reyes",
-        phone: "09189876543",
-        email: "sales@vitaplus.example",
-        address: "Imus, Cavite",
-        status: "Active"
-    }
-];
+let supplierRecords = [];
 let nextSupplierId = 3;
 
 async function initializeSuppliersPage() {
@@ -3860,34 +3825,7 @@ function escapeSupplierText(value) {
     })[character]);
 }
 
-const expirationMedicines = [
-    {
-        name: "Paracetamol 500mg",
-        batch: "PAR-2026-001",
-        quantity: 120,
-        expiry: "2026-11-15"
-    },
-    {
-        name: "Amoxicillin 500mg",
-        batch: "AMX-2026-002",
-        quantity: 80,
-        expiry: "2026-10-10"
-    },
-    {
-        name: "Cetirizine 10mg",
-        batch: "CET-2026-003",
-        quantity: 60,
-        expiry: "2027-06-20"
-    },
-    {
-        name: "Ibuprofen 200mg",
-        batch: "IBU-2026-004",
-        quantity: 90,
-        expiry: "2026-12-05"
-    }
-];
-
-function initializeExpirationPage() {
+async function initializeExpirationPage() {
     const search = document.getElementById("expirationSearch");
     const filter = document.getElementById("expirationFilter");
 
@@ -3895,7 +3833,10 @@ function initializeExpirationPage() {
 
     search.oninput = renderExpirationMedicines;
     filter.onchange = renderExpirationMedicines;
+    const before = document.getElementById("expirationBefore");
+    if (before) before.onchange = renderExpirationMedicines;
 
+    await loadMedicinesFromDatabase();
     renderExpirationMedicines();
 }
 
@@ -3933,7 +3874,7 @@ function renderExpirationMedicines() {
         document.getElementById("expirationFilter")?.value || "All"
     );
 
-    const records = expirationMedicines.map(medicine => ({
+    const records = inventoryMedicines.filter(medicine => medicine.expiry).map(medicine => ({
         ...medicine,
         ...getExpirationStatus(medicine.expiry)
     }));
@@ -3957,18 +3898,20 @@ function renderExpirationMedicines() {
     const filtered = records.filter(item => {
         const matchesSearch =
             item.name.toLowerCase().includes(search) ||
-            item.batch.toLowerCase().includes(search);
+            (item.batch || "").toLowerCase().includes(search) ||
+            (item.shelf || "").toLowerCase().includes(search);
 
         const matchesFilter =
             filter === "All" || item.status === filter;
 
-        return matchesSearch && matchesFilter;
+        const before = document.getElementById("expirationBefore")?.value || "";
+        return matchesSearch && matchesFilter && (!before || item.expiry <= before);
     });
 
     if (filtered.length === 0) {
         body.innerHTML = `
             <tr>
-                <td colspan="6">No medicines found.</td>
+                <td colspan="7">No medicines with an expiration date found. Add an expiration date in Inventory.</td>
             </tr>
         `;
         return;
@@ -3996,7 +3939,8 @@ function renderExpirationMedicines() {
         return `
             <tr>
                 <td>${escapeSupplierText(item.name)}</td>
-                <td>${escapeSupplierText(item.batch)}</td>
+                <td>${escapeSupplierText(item.batch || "—")}</td>
+                <td>${escapeSupplierText(item.shelf || "Not specified")}</td>
                 <td>${item.quantity}</td>
                 <td>${new Date(item.expiry + "T00:00:00").toLocaleDateString()}</td>
                 <td>${remainingText}</td>
@@ -4203,7 +4147,9 @@ async function initializeSettingsPage() {
             const result = await branding.saveSettings(payload);
             populateFields(result.settings);
             recordLocalActivity("Settings", "Updated Pharmacy Info", `Saved settings for ${pharmacyName}`);
-            const msg = "Pharmacy information saved. Name and logo updated across the web!";
+            const msg = result.syncedToServer
+                ? "Pharmacy information saved. Logo updated across the app."
+                : "Saved in this browser only. Connect to the server to share the logo across devices.";
             setInlineStatus(msg, false);
             showSettingsMessage(msg, false);
         } catch (error) {
@@ -4389,7 +4335,7 @@ async function initializeCashiersPage() {
             usernameField.readOnly = false;
             statusField.value = "Active";
             passwordField.required = true;
-            passwordLabel.textContent = "Password * (min 6 characters)";
+            passwordLabel.textContent = "Password * (min 12 characters)";
         }
         panel.hidden = false;
         nameField.focus();
@@ -4415,12 +4361,12 @@ async function initializeCashiersPage() {
             showCashierMessage("Full name and username are required.", true);
             return;
         }
-        if (!editingId && (!password || password.length < 6)) {
-            showCashierMessage("Password must be at least 6 characters.", true);
+        if (!editingId && (!password || password.length < 12)) {
+            showCashierMessage("Password must be at least 12 characters.", true);
             return;
         }
-        if (editingId && password && password.length < 6) {
-            showCashierMessage("New password must be at least 6 characters.", true);
+        if (editingId && password && password.length < 12) {
+            showCashierMessage("New password must be at least 12 characters.", true);
             return;
         }
 
@@ -4737,7 +4683,7 @@ function initializeAccountPage() {
             if (branding && result.user) {
                 branding.setActiveSession({
                     ...session,
-                    fullName: result.user.full_name,
+                    fullName: result.user.fullName || result.user.full_name,
                     email: result.user.email || ""
                 });
                 branding.applyBranding();
@@ -4758,8 +4704,8 @@ function initializeAccountPage() {
             setMsg(passwordMsg, "Please fill out all password fields.", true);
             return;
         }
-        if (newPassword.length < 6) {
-            setMsg(passwordMsg, "New password must be at least 6 characters.", true);
+        if (newPassword.length < 12) {
+            setMsg(passwordMsg, "New password must be at least 12 characters.", true);
             return;
         }
         if (newPassword !== confirmPassword) {
@@ -4802,7 +4748,9 @@ function initializeAccountPage() {
             }
 
             passwordForm.reset();
-            setMsg(passwordMsg, result.message || "Password changed successfully.", false);
+            if (branding) branding.clearActiveSession();
+            alert("Password changed. Please sign in again.");
+            window.location.href = "index.html";
         } catch (err) {
             setMsg(passwordMsg, err.message || "Password update failed.", true);
         }
@@ -4875,8 +4823,8 @@ function getNotifications() {
     }
 
     // Check expiration records when available.
-    if (typeof expirationMedicines !== "undefined") {
-        expirationMedicines.forEach(medicine => {
+    if (Array.isArray(inventoryMedicines)) {
+        inventoryMedicines.filter(medicine => medicine.expiry).forEach(medicine => {
             const result = getExpirationStatus(medicine.expiry);
 
             if (result.status === "Expired") {
@@ -5057,8 +5005,9 @@ function refreshDashboardStats() {
         }
     }
 
-    if (typeof expirationMedicines !== "undefined" && expiringSoonElement) {
-        const expAlerts = expirationMedicines.filter(med => {
+    if (expiringSoonElement) {
+        const expAlerts = inventoryMedicines.filter(med => {
+            if (!med.expiry) return false;
             const st = getExpirationStatus(med.expiry).status;
             return st === "Expired" || st === "Expiring Soon";
         }).length;
@@ -5096,7 +5045,10 @@ async function loadMedicinesFromDatabase() {
                 price: Number(row.price),
                 discount: normalizeDiscountPercent(row.discount_percent),
                 quantity: Number(row.quantity),
-                reorderLevel: Number(row.reorder_level)
+                reorderLevel: Number(row.reorder_level),
+                batch: row.batch_number || "",
+                expiry: row.expiry_date ? String(row.expiry_date).slice(0, 10) : "",
+                shelf: row.shelf_location || ""
             };
         });
 
@@ -5116,7 +5068,7 @@ async function loadMedicinesFromDatabase() {
         console.error("Load medicines error:", error);
         renderInventory();
         showInventoryMessage(
-            "Showing local preview inventory (connect MySQL for database persistence)."
+            "Unable to load inventory. Reconnect MySQL and try again."
         );
     }
 }
@@ -5312,7 +5264,17 @@ function initializePurchaseReceiveButton() {
 // INITIAL ROLE & ROUTE STARTUP
 // =========================================
 
-(function bootRoleAndInitialPage() {
+(async function bootRoleAndInitialPage() {
+    try {
+        const response = await fetch("/api/auth/session");
+        if (!response.ok) throw new Error("Session unavailable");
+        const data = await response.json();
+        if (!data.user) throw new Error("Session unavailable");
+        window.EPharmaBranding.setActiveSession(data.user);
+    } catch {
+        window.location.href = "index.html";
+        return;
+    }
     applyRoleAccessControl();
 
     const hashPage = (window.location.hash || "").replace(/^#/, "").trim();

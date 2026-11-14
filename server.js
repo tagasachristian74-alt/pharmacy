@@ -1,7 +1,6 @@
 
 const express = require("express");
 const mysql = require("mysql2/promise");
-const cors = require("cors");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -10,11 +9,17 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// The browser app is same-origin; do not enable cross-origin API access.
+app.disable("x-powered-by");
 app.use(express.json({ limit: "10mb" }));
 
-// Serve E-Pharma frontend files
-app.use(express.static(__dirname));
+// Serve only public app assets; never expose source, configuration or data files.
+const publicFiles = new Set(["/", "/index.html", "/dashboard.html", "/style.css", "/dashboard.css", "/inventroy.css", "/script.js", "/dashboard.js", "/pharmacy-branding.js"]);
+app.use((req, res, next) => {
+    if (req.path.startsWith("/api") || publicFiles.has(req.path) || /^\/assets\/[A-Za-z0-9_.-]+$/.test(req.path)) return next();
+    return res.sendStatus(404);
+});
+app.use(express.static(__dirname, { dotfiles: "deny" }));
 
 function hashPassword(plainText) {
     const salt = crypto.randomBytes(16).toString("hex");
@@ -38,6 +43,9 @@ function verifyPassword(plainText, storedHash) {
 // MySQL connection pool
 const db = mysql.createPool({
     host: process.env.DB_HOST || "localhost",
+    port: Number(process.env.DB_PORT || 3306),
+    ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: true } : undefined,
+    dateStrings: true,
     user: process.env.DB_USER || "root",
     password: process.env.DB_PASSWORD || "",
     database: process.env.DB_NAME || "epharma_db",
@@ -67,7 +75,7 @@ function sendDbError(res, error, fallbackMessage) {
     if (isDbConnectionError(error)) {
         return res.status(503).json({
             dbUnavailable: true,
-            message: "Database connection unavailable. Using demo/local fallback."
+            message: "Database connection unavailable. Reconnect MySQL and try again."
         });
     }
     return res.status(500).json({
@@ -81,6 +89,7 @@ async function ensureSchemaUpgrades() {
 
     const dbName = process.env.DB_NAME || "epharma_db";
     const checks = [
+        { table: "medicines", column: "shelf_location", sql: "ALTER TABLE medicines ADD COLUMN shelf_location VARCHAR(100) DEFAULT NULL" },
         {
             table: "medicines",
             column: "discount_percent",
@@ -149,14 +158,13 @@ async function ensureSchemaUpgrades() {
 
     const [countRows] = await db.query("SELECT COUNT(*) AS cnt FROM users");
     if (Number(countRows[0]?.cnt || 0) === 0) {
+        const password = process.env.DB_ADMIN_PASSWORD || "";
+        if (password.length < 12) {
+            throw new Error("Set DB_ADMIN_PASSWORD to a unique password of at least 12 characters before first login.");
+        }
         await db.query(
-            `INSERT INTO users (username, password_hash, full_name, email, role, status)
-             VALUES (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?)`,
-            [
-                "admin", hashPassword("Admin123!"), "Administrator", "admin@example.com", "admin", "Active",
-                "cashier", hashPassword("Cashier123!"), "Cashier 1 (Alex Reyes)", "cashier@example.com", "cashier", "Active",
-                "cashier2", hashPassword("Cashier123!"), "Cashier 2 (Maria Santos)", "maria@example.com", "cashier", "Active"
-            ]
+            "INSERT INTO users (username, password_hash, full_name, email, role, status) VALUES (?, ?, ?, ?, ?, ?)",
+            ["admin", hashPassword(password), "Administrator", "", "admin", "Active"]
         );
     }
 
@@ -182,6 +190,60 @@ async function recordActivityLog({ username, actor_name, role, module, action, d
         // Never fail primary API request if audit logging fails.
     }
 }
+
+// Server-issued, HttpOnly sessions. Stored in memory: restart logs everyone out.
+const sessions = new Map();
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const loginAttempts = new Map();
+function cookieToken(req) {
+    const match = (req.headers.cookie || "").match(/(?:^|;\s*)epharma_session=([a-f0-9]{64})(?:;|$)/);
+    return match ? match[1] : "";
+}
+function cookieOptions() {
+    return { httpOnly: true, sameSite: "strict", secure: process.env.COOKIE_SECURE === "true", path: "/", maxAge: SESSION_TTL_MS };
+}
+app.use("/api", async (req, res, next) => {
+    if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.headers.origin) {
+        try {
+            if (new URL(req.headers.origin).host !== req.headers.host) return res.status(403).json({ message: "Cross-origin request denied." });
+        } catch { return res.status(403).json({ message: "Invalid origin." }); }
+    }
+    if ((req.path === "/auth/login" && req.method === "POST") || (req.path === "/settings" && req.method === "GET") || (req.path === "/" && req.method === "GET")) return next();
+    const token = cookieToken(req);
+    const session = sessions.get(token);
+    if (!session || session.expires <= Date.now()) {
+        if (token) sessions.delete(token);
+        return res.status(401).json({ message: "Please sign in." });
+    }
+    if (req.path === "/auth/logout" && req.method === "POST") return next();
+    try {
+        const [rows] = await db.query("SELECT user_id, username, full_name, email, role, status, password_hash FROM users WHERE user_id = ? LIMIT 1", [session.userId]);
+        const user = rows[0];
+        if (!user || user.status !== "Active" || user.password_hash !== session.passwordHash) {
+            sessions.delete(token);
+            return res.status(401).json({ message: "Session expired. Please sign in again." });
+        }
+        req.user = user;
+        if (req.path === "/auth/session" || req.path === "/auth/logout") return next();
+        if (user.role !== "admin") {
+            const allowed = (req.path === "/medicines" && req.method === "GET") ||
+                (req.path === "/sales" && ["GET", "POST"].includes(req.method)) ||
+                (["/account/profile", "/account/password"].includes(req.path) && req.method === "PUT");
+            if (!allowed) return res.status(403).json({ message: "Administrator access required." });
+        }
+        if (req.path.startsWith("/account/")) { req.body = req.body || {}; req.body.username = user.username; }
+        return next();
+    } catch (error) { return sendDbError(res, error, "Unable to verify session."); }
+});
+app.get("/api/auth/session", (req, res) => res.json({ user: {
+    user_id: req.user.user_id, username: req.user.username, fullName: req.user.full_name,
+    email: req.user.email || "", role: req.user.role
+} }));
+app.post("/api/auth/logout", (req, res) => {
+    sessions.delete(cookieToken(req));
+    res.clearCookie("epharma_session", { ...cookieOptions(), maxAge: undefined });
+    res.json({ success: true });
+});
 
 // Test server
 app.get("/api", (req, res) => {
@@ -239,7 +301,8 @@ app.post("/api/medicines", async (req, res) => {
             quantity,
             reorder_level,
             expiry_date,
-            batch_number
+            batch_number,
+            shelf_location
         } = req.body;
 
         const discount = discount_percent === undefined || discount_percent === ""
@@ -268,8 +331,8 @@ app.post("/api/medicines", async (req, res) => {
         const [result] = await db.query(
             `INSERT INTO medicines
             (medicine_name, category, price, discount_percent, quantity,
-             reorder_level, expiry_date, batch_number)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             reorder_level, expiry_date, batch_number, shelf_location)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 medicine_name.trim(),
                 category || null,
@@ -278,14 +341,15 @@ app.post("/api/medicines", async (req, res) => {
                 Number(quantity),
                 Number(reorder_level ?? 10),
                 expiry_date || null,
-                batch_number || null
+                batch_number || null,
+                shelf_location ? String(shelf_location).trim().slice(0, 100) : null
             ]
         );
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Administrator",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Inventory",
             action: "Added Medicine",
             details: `${medicine_name.trim()} (₱${Number(price).toFixed(2)}, ${Number(discount.toFixed(2))}% off, Qty: ${Number(quantity)})`
@@ -313,7 +377,8 @@ app.put("/api/medicines/:id", async (req, res) => {
             quantity,
             reorder_level,
             expiry_date,
-            batch_number
+            batch_number,
+            shelf_location
         } = req.body;
 
         const discount = discount_percent === undefined || discount_percent === ""
@@ -343,7 +408,7 @@ app.put("/api/medicines/:id", async (req, res) => {
             `UPDATE medicines
              SET medicine_name = ?, category = ?, price = ?, discount_percent = ?,
                  quantity = ?, reorder_level = ?, expiry_date = ?,
-                 batch_number = ?
+                 batch_number = ?, shelf_location = ?
              WHERE medicine_id = ?`,
             [
                 medicine_name.trim(),
@@ -354,6 +419,7 @@ app.put("/api/medicines/:id", async (req, res) => {
                 Number(reorder_level ?? 10),
                 expiry_date || null,
                 batch_number || null,
+                shelf_location ? String(shelf_location).trim().slice(0, 100) : null,
                 id
             ]
         );
@@ -365,9 +431,9 @@ app.put("/api/medicines/:id", async (req, res) => {
         }
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Administrator",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Inventory",
             action: "Updated Medicine",
             details: `${medicine_name.trim()} (₱${Number(price).toFixed(2)}, ${Number(discount.toFixed(2))}% off, Qty: ${Number(quantity)})`
@@ -395,9 +461,9 @@ app.delete("/api/medicines/:id", async (req, res) => {
         }
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Administrator",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Inventory",
             action: "Deleted Medicine",
             details: `Removed medicine ID #${req.params.id}`
@@ -421,7 +487,7 @@ app.delete("/api/medicines/:id", async (req, res) => {
 app.get("/api/sales", async (req, res) => {
     try {
         await ensureSchemaUpgrades();
-        const cashierUsername = String(req.query.cashier_username || "").trim();
+        const cashierUsername = req.user.role === "cashier" ? req.user.username : String(req.query.cashier_username || "").trim();
         const params = [];
         let whereClause = "";
         if (cashierUsername) {
@@ -531,11 +597,15 @@ app.post("/api/sales", async (req, res) => {
             });
         }
 
+        if (req.user.role === "cashier" && ![0, 20, Number(medicine.discount_percent || 0)].includes(discountPercent)) {
+            await connection.rollback();
+            return res.status(403).json({ message: "Cashiers may only use the inventory discount or approved presets." });
+        }
         discountPercent = Number(discountPercent.toFixed(2));
         const unitPrice = Number((originalPrice * (1 - discountPercent / 100)).toFixed(2));
         const subtotal = Number((unitPrice * qty).toFixed(2));
-        const cashierUser = String(cashier_username || "admin").trim().slice(0, 80) || "admin";
-        const cashierLabel = String(cashier_name || "Admin").trim().slice(0, 120) || "Admin";
+        const cashierUser = req.user.username;
+        const cashierLabel = req.user.full_name;
 
         const [saleResult] = await connection.query(
             "INSERT INTO sales (total_amount, cashier_username, cashier_name) VALUES (?, ?, ?)",
@@ -561,7 +631,7 @@ app.post("/api/sales", async (req, res) => {
         await recordActivityLog({
             username: cashierUser,
             actor_name: cashierLabel,
-            role: actor_role === "admin" ? "admin" : "cashier",
+            role: req.user.role,
             module: "Sales",
             action: "Completed Sale",
             details: `Receipt EP-${String(saleResult.insertId).padStart(4, "0")}: ${medicine.medicine_name} x${qty} (₱${subtotal.toFixed(2)})`
@@ -704,9 +774,9 @@ app.post("/api/purchases", async (req, res) => {
         await connection.commit();
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Admin",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Purchase",
             action: "Created Purchase",
             details: `PUR-${String(purchaseResult.insertId).padStart(4, "0")}: medicine #${medicineId} x${qty} from ${supplierName}`
@@ -776,9 +846,9 @@ app.patch("/api/purchases/:id/receive", async (req, res) => {
         await connection.commit();
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Admin",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Purchase",
             action: "Received Purchase",
             details: `Marked PUR-${String(req.params.id).padStart(4, "0")} Received and added stock`
@@ -847,9 +917,9 @@ app.post("/api/suppliers", async (req, res) => {
         );
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Admin",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Suppliers",
             action: "Added Supplier",
             details: `Added supplier ${supplier_name.trim()}`
@@ -910,9 +980,9 @@ app.put("/api/suppliers/:id", async (req, res) => {
         }
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Admin",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Suppliers",
             action: "Updated Supplier",
             details: `Updated supplier #${req.params.id} (${supplier_name.trim()})`
@@ -942,9 +1012,9 @@ app.delete("/api/suppliers/:id", async (req, res) => {
         }
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Admin",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Suppliers",
             action: "Deleted Supplier",
             details: `Deleted supplier #${req.params.id}`
@@ -1021,7 +1091,7 @@ function isSafeLogoValue(value) {
         return true;
     }
 
-    if (typeof value !== "string" || value.length > 5 * 1024 * 1024) {
+    if (typeof value !== "string" || value.length > 7 * 1024 * 1024) {
         return false;
     }
 
@@ -1290,9 +1360,9 @@ async function handleSaveSettings(req, res) {
         }
 
         await recordActivityLog({
-            username: String(body.actor_username || "admin"),
-            actor_name: String(body.actor_name || updated.adminName || "Admin"),
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Settings",
             action: "Updated Pharmacy Settings",
             details: `Saved settings for ${updated.pharmacyName}`
@@ -1321,6 +1391,12 @@ app.post("/api/settings", handleSaveSettings);
 /* ===== AUTH & MY ACCOUNT API ===== */
 
 app.post("/api/auth/login", async (req, res) => {
+    const key = req.ip;
+    const now = Date.now();
+    const attempts = (loginAttempts.get(key) || []).filter(time => now - time < 15 * 60 * 1000);
+    if (attempts.length >= 10) return res.status(429).json({ message: "Too many login attempts. Try again later." });
+    attempts.push(now);
+    loginAttempts.set(key, attempts);
     try {
         const username = String(req.body?.username || "").trim();
         const password = String(req.body?.password || "");
@@ -1363,6 +1439,10 @@ app.post("/api/auth/login", async (req, res) => {
             details: `${user.role === "cashier" ? "Cashier" : "Admin"} signed in`
         });
 
+        loginAttempts.delete(key);
+        const token = crypto.randomBytes(32).toString("hex");
+        sessions.set(token, { userId: user.user_id, passwordHash: user.password_hash, expires: Date.now() + SESSION_TTL_MS });
+        res.cookie("epharma_session", token, cookieOptions());
         res.json({
             success: true,
             user: {
@@ -1376,6 +1456,7 @@ app.post("/api/auth/login", async (req, res) => {
         });
     } catch (error) {
         console.error("Login error:", error.message);
+        if (error.message.startsWith("Set DB_ADMIN_PASSWORD")) return res.status(503).json({ message: "Server administrator must configure the initial admin password." });
         sendDbError(res, error, "Unable to sign in.");
     }
 });
@@ -1446,9 +1527,9 @@ app.put("/api/account/password", async (req, res) => {
             });
         }
 
-        if (newPassword.length < 6) {
+        if (newPassword.length < 12) {
             return res.status(400).json({
-                message: "New password must be at least 6 characters."
+                message: "New password must be at least 12 characters."
             });
         }
 
@@ -1520,9 +1601,9 @@ app.post("/api/users", async (req, res) => {
         const role = req.body?.role === "admin" ? "admin" : "cashier";
         const status = req.body?.status === "Inactive" ? "Inactive" : "Active";
 
-        if (!username || !fullName || password.length < 6) {
+        if (!username || !fullName || password.length < 12) {
             return res.status(400).json({
-                message: "Username, full name, and a password of at least 6 characters are required."
+                message: "Username, full name, and a password of at least 12 characters are required."
             });
         }
 
@@ -1551,8 +1632,8 @@ app.post("/api/users", async (req, res) => {
         );
 
         await recordActivityLog({
-            username: req.body?.actor_username || "admin",
-            actor_name: req.body?.actor_name || "Admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
             role: "admin",
             module: "Cashiers",
             action: "Created Account",
@@ -1584,9 +1665,9 @@ app.put("/api/users/:id", async (req, res) => {
             });
         }
 
-        if (newPassword && newPassword.length < 6) {
+        if (newPassword && newPassword.length < 12) {
             return res.status(400).json({
-                message: "New password must be at least 6 characters."
+                message: "New password must be at least 12 characters."
             });
         }
 
@@ -1616,8 +1697,8 @@ app.put("/api/users/:id", async (req, res) => {
         }
 
         await recordActivityLog({
-            username: req.body?.actor_username || "admin",
-            actor_name: req.body?.actor_name || "Admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
             role: "admin",
             module: "Cashiers",
             action: "Updated Account",
@@ -1661,9 +1742,9 @@ app.delete("/api/users/:id", async (req, res) => {
         await db.query("DELETE FROM users WHERE user_id = ?", [id]);
 
         await recordActivityLog({
-            username: "admin",
-            actor_name: "Admin",
-            role: "admin",
+            username: req.user.username,
+            actor_name: req.user.full_name,
+            role: req.user.role,
             module: "Cashiers",
             action: "Deleted Account",
             details: `Deleted account '${rows[0].username}'`
@@ -1700,7 +1781,8 @@ app.get("/api/activity-logs", async (req, res) => {
 
 app.post("/api/activity-logs", async (req, res) => {
     try {
-        const { username, actor_name, role, module, action, details } = req.body || {};
+        const { module, action, details } = req.body || {};
+        const { username, full_name: actor_name, role } = req.user;
         if (!module || !action) {
             return res.status(400).json({ message: "Module and action are required." });
         }

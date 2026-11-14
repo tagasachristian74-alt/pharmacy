@@ -328,6 +328,9 @@
             : `${name} | Pharmacy Management System`;
         updateFavicon(logoSrc);
 
+        // Keep the receipt logo in sync if the sales page is open.
+        applyLogoToElement(document.getElementById("receiptPharmacyLogo"), null, logoSrc, hasCustom, name);
+
         // Dashboard sidebar brand.
         applyLogoToElement(
             document.getElementById("sidebarBrandLogo"),
@@ -497,6 +500,10 @@
                 body: JSON.stringify(cached)
             });
 
+            if (!response.ok) {
+                const error = await response.json().catch(() => ({}));
+                throw new Error(error.message || "Unable to save settings on the server.");
+            }
             if (response.ok) {
                 const data = await response.json();
                 if (data && data.settings) {
@@ -506,8 +513,13 @@
                     return { settings: serverSaved, syncedToServer: true };
                 }
             }
-        } catch {
-            // Static mode fallback: localStorage already updated.
+        } catch (error) {
+            if (!(error instanceof TypeError)) {
+                cacheSettings(current);
+                applyBranding(current);
+                throw error;
+            }
+            // Network unavailable: the browser cache is the only copy.
         }
 
         return { settings: cached, syncedToServer };

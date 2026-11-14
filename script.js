@@ -77,8 +77,8 @@ function selectRole(role) {
     }
     if (demoRoleHint) {
         demoRoleHint.textContent = selectedRole === "cashier"
-            ? "Cashier: cashier / Cashier123! (or cashier2)"
-            : "Admin: admin / Admin123!";
+            ? "Sign in with your cashier account."
+            : "Sign in with your administrator account.";
     }
 }
 
@@ -243,7 +243,8 @@ loginForm.addEventListener("submit", async function (event) {
         const payload = await response.json().catch(() => ({}));
 
         if (response.status === 503 || payload.dbUnavailable) {
-            throw new Error("DB_UNAVAILABLE");
+            showMessage(payload.message || "Database unavailable. Contact your administrator.", "error");
+            return;
         }
 
         if (!response.ok) {
@@ -259,31 +260,7 @@ loginForm.addEventListener("submit", async function (event) {
             return;
         }
     } catch (error) {
-        if (error && error.message !== "DB_UNAVAILABLE" && error.name !== "TypeError") {
-            console.warn("Auth fallback:", error.message);
-        }
-
-        const matched = getLocalAccounts().find(
-            acc => String(acc.username || "").toLowerCase() === username.toLowerCase() && acc.password === password
-        );
-
-        if (!matched) {
-            showMessage(
-                "Invalid username or password. Use Admin (admin / Admin123!) or Cashier (cashier / Cashier123!).",
-                "error"
-            );
-            return;
-        }
-
-        if (matched.status === "Inactive") {
-            showMessage(
-                "This account is currently inactive. Contact the administrator.",
-                "error"
-            );
-            return;
-        }
-
-        completeLogin(matched);
+        showMessage("Unable to sign in. Check that the server and MySQL database are running.", "error");
     } finally {
         if (submitBtn) submitBtn.disabled = false;
     }
@@ -297,7 +274,7 @@ forgotPassword.addEventListener("click", function (event) {
     event.preventDefault();
 
     showMessage(
-        "Demo accounts: Admin (admin / Admin123!) or Cashier (cashier / Cashier123!).",
+        "Contact your administrator to reset your password.",
         "error"
     );
 });
