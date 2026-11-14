@@ -5,7 +5,8 @@
   "main": "dashboard.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/*.test.cjs"
+    "test": "node --test tests/*.test.cjs",
+    "test:mysql": "node --test tests/mysql.integration.cjs"
   },
   "keywords": [],
   "author": "",

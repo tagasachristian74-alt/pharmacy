@@ -73,3 +73,21 @@ Cashiers only see sales linked to their stable user ID. Historical sales with a 
 ## Staff ID migration (in progress)
 
 Back up the database before updating. On startup/API use, the server adds avatar and staff ID columns, a unique staff ID index, and a durable ID sequence, then assigns IDs to accounts without one. This requires CREATE, ALTER, INDEX, INSERT and UPDATE privileges. The Generate ID button consumes a sequence number but is not a reservation; gaps and duplicate-save conflicts are possible. Newly created sales record the staff ID as a snapshot; older sales without one remain unchanged. Test the migration on a restored copy before applying it to important data.
+
+### Isolated real-MySQL integration test
+
+`npm run test:mysql` is skipped unless `EPHARMA_TEST_MYSQL=1`. Run it only on a **dedicated local test server**, never on production. It creates and drops a randomly named `epharma_test_*` database and needs CREATE/DROP/ALTER/INDEX privileges. It checks an old-schema migration, admin/cashier accounts, staff IDs, profile photo storage and a sale; it never uses the existing `epharma_db`. The process must be able to bind a free localhost port.
+
+In Windows PowerShell, after installing dependencies and starting a dedicated test MySQL:
+
+```powershell
+$env:EPHARMA_TEST_MYSQL = '1'
+$env:TEST_DB_HOST = '127.0.0.1'
+$env:TEST_DB_PORT = '3307'
+$env:TEST_DB_USER = 'root'
+$env:TEST_DB_PASSWORD = [Net.NetworkCredential]::new('', (Read-Host 'Test MySQL password' -AsSecureString)).Password
+npm.cmd run test:mysql
+Remove-Item Env:TEST_DB_PASSWORD, Env:EPHARMA_TEST_MYSQL -ErrorAction SilentlyContinue
+```
+
+Do not share test credentials. If a test is interrupted, the test database may remain and can be inspected and removed by an administrator.
