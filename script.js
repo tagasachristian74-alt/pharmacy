@@ -94,6 +94,12 @@ function clearMessage() {
     message.textContent = "";
     message.className = "message";
 }
+try {
+    if (sessionStorage.getItem("epharmaSessionExpired") === "1") {
+        sessionStorage.removeItem("epharmaSessionExpired");
+        showMessage("Session expired. Please sign in again.", "error");
+    }
+} catch {}
 
 function completeLogin(user) {
     selectRole(user.role);

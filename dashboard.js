@@ -29,8 +29,33 @@ const dashboardHomeContent = pageContent
 
 const navLinks = document.querySelectorAll(".nav-link");
 
+// Dashboard API sessions are server-side. A 401 means this browser must sign in again.
+const dashboardFetch = window.fetch.bind(window);
+let sessionRedirectPending = false;
+window.fetch = async function (input, init) {
+    const response = await dashboardFetch(input, init);
+    const rawUrl = typeof input === "string" ? input : input.url;
+    const url = new URL(rawUrl, window.location.href);
+    if (response.status === 401 && url.origin === window.location.origin && url.pathname.startsWith("/api/") && !sessionRedirectPending) {
+        sessionRedirectPending = true;
+        window.EPharmaBranding?.clearActiveSession();
+        try { sessionStorage.setItem("epharmaSessionExpired", "1"); } catch {}
+        window.location.replace("index.html");
+    }
+    return response;
+};
+
 let isDemoDatabaseMode = false;
 let pendingSaleMedicineId = null;
+let notificationTarget = null;
+function highlightNotificationTarget(page, container) {
+    if (!notificationTarget || notificationTarget.page !== page || Date.now() > notificationTarget.until) return;
+    const row = container.querySelector(`[data-medicine-id="${notificationTarget.id}"]`);
+    if (!row) return;
+    row.classList.add("notification-highlight");
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(() => row.classList.remove("notification-highlight"), Math.max(0, notificationTarget.until - Date.now()));
+}
 
 const DEMO_LOGS_KEY = "epharmaDemoLogs";
 
@@ -170,6 +195,12 @@ function formatPharmacyDate(value, includeTime = false) {
     const format = window.EPharmaBranding?.getCachedSettings().dateFormat || "MM/DD/YYYY";
     const formatted = format === "YYYY-MM-DD" ? `${year}-${month}-${day}` : format === "DD/MM/YYYY" ? `${day}/${month}/${year}` : `${month}/${day}/${year}`;
     return includeTime ? `${formatted} ${pad(date.getHours())}:${pad(date.getMinutes())}` : formatted;
+}
+function isExpiredMedicine(medicine) {
+    return Boolean(medicine.expiry && getExpirationStatus(medicine.expiry).status === "Expired");
+}
+function isDispensableMedicine(medicine) {
+    return Number(medicine.quantity) > 0 && !isExpiredMedicine(medicine);
 }
 function lowStockThreshold(medicine) {
     const globalLevel = Number(window.EPharmaBranding?.getCachedSettings().lowStockLevel || 10);
@@ -1966,6 +1997,8 @@ function renderInventory() {
         };
 
         const row = document.createElement("tr");
+        row.dataset.medicineId = String(medicine.id);
+        const expired = isExpiredMedicine(medicine);
 
         const nameCell = document.createElement("td");
         const nameStrong = document.createElement("strong");
@@ -2048,6 +2081,12 @@ function renderInventory() {
         badge.textContent = statusLabels[status];
 
         statusCell.appendChild(badge);
+        if (expired) {
+            const expiryBadge = document.createElement("span");
+            expiryBadge.className = "badge danger";
+            expiryBadge.textContent = "Expired";
+            statusCell.appendChild(expiryBadge);
+        }
         row.appendChild(statusCell);
 
         // Action buttons (Admin vs Cashier).
@@ -2060,8 +2099,8 @@ function renderInventory() {
             const sellButton = document.createElement("button");
             sellButton.type = "button";
             sellButton.className = "sell-quick-button";
-            sellButton.textContent = status === "out" ? "Out of Stock" : "Sell";
-            sellButton.disabled = status === "out";
+            sellButton.textContent = expired ? "Expired" : status === "out" ? "Out of Stock" : "Sell";
+            sellButton.disabled = expired || status === "out";
 
             sellButton.addEventListener("click", function () {
                 pendingSaleMedicineId = medicine.id;
@@ -2105,6 +2144,7 @@ function renderInventory() {
 
         tbody.appendChild(row);
     });
+    highlightNotificationTarget("inventory", tbody);
 }
 
 
@@ -2853,8 +2893,11 @@ async function initializeSalesPage() {
             const finalPrice = calculateDiscountedPrice(medicine.price, discount);
 
             option.value = String(medicine.id);
+            const expired = isExpiredMedicine(medicine);
+            const outOfStock = Number(medicine.quantity) <= 0;
+            option.disabled = expired || outOfStock;
             option.textContent =
-                medicine.name + (medicine.requiresPrescription ? " [Rx]" : "") +
+                medicine.name + (expired ? " [Expired]" : outOfStock ? " [Out of stock]" : "") + (medicine.requiresPrescription ? " [Rx]" : "") +
                 " — ₱" + finalPrice.toFixed(2) +
                 (discount > 0 ? " (" + discount + "% OFF)" : "") +
                 " · Stock: " + medicine.quantity;
@@ -4065,7 +4108,7 @@ function renderExpirationMedicines() {
         }
 
         return `
-            <tr>
+            <tr data-medicine-id="${Number(item.id)}">
                 <td>${escapeSupplierText(item.name)}</td>
                 <td>${escapeSupplierText(item.batch || "—")}</td>
                 <td>${escapeSupplierText(item.shelf || "Not specified")}</td>
@@ -4080,6 +4123,7 @@ function renderExpirationMedicines() {
             </tr>
         `;
     }).join("");
+    highlightNotificationTarget("expiration", body);
 }
 
 async function initializeSettingsPage() {
@@ -4915,6 +4959,7 @@ function initializeNotifications() {
 
     document.addEventListener("click", function () {
         panel.hidden = true;
+        button.setAttribute("aria-expanded", "false");
     });
 
     markReadButton.onclick = function () {
@@ -4939,7 +4984,8 @@ function getNotifications() {
                     id: `stock-${medicine.id}`,
                     title: "Out of Stock",
                     message: `${medicine.name} has no stock remaining.`,
-                    type: "stock"
+                    type: "stock", medicineId: medicine.id, medicineName: medicine.name,
+                    batch: medicine.batch, status: "Out of Stock", targetPage: "inventory"
                 });
             } else if (
                 Number(medicine.quantity) <= lowStockThreshold(medicine)
@@ -4948,7 +4994,8 @@ function getNotifications() {
                     id: `stock-${medicine.id}`,
                     title: "Low Stock Alert",
                     message: `${medicine.name} has only ${medicine.quantity} units left.`,
-                    type: "stock"
+                    type: "stock", medicineId: medicine.id, medicineName: medicine.name,
+                    batch: medicine.batch, status: "Low Stock", targetPage: "inventory"
                 });
             }
         });
@@ -4964,14 +5011,16 @@ function getNotifications() {
                     id: `expired-${medicine.id}`,
                     title: "Expired Medicine",
                     message: `${medicine.name} (${medicine.batch}) has expired.`,
-                    type: "expiry"
+                    type: "expiry", medicineId: medicine.id, medicineName: medicine.name,
+                    batch: medicine.batch, status: "Expired", targetPage: "expiration"
                 });
             } else if (result.status === "Expiring Soon") {
                 notifications.push({
                     id: `expiring-${medicine.id}`,
                     title: "Expiring Soon",
                     message: `${medicine.name} expires in ${result.daysRemaining} days.`,
-                    type: "expiry"
+                    type: "expiry", medicineId: medicine.id, medicineName: medicine.name,
+                    batch: medicine.batch, status: "Expiring Soon", targetPage: "expiration"
                 });
             }
         });
@@ -5012,13 +5061,30 @@ function renderNotifications() {
     }
 
     list.innerHTML = notifications.map(item => `
-        <div class="notification-item ${
-            notificationReadState[item.id] ? "" : "unread"
-        }">
+        <button type="button" data-notification-index="${notifications.indexOf(item)}" class="notification-item ${notificationReadState[item.id] ? "" : "unread"} ${item.status === "Expired" || item.status === "Out of Stock" ? "alert-critical" : "alert-warning"}">
             <strong>${escapeSupplierText(item.title)}</strong>
-            <p>${escapeSupplierText(item.message)}</p>
-        </div>
+            <span>${escapeSupplierText(item.message)}</span>
+            <small>View in ${item.targetPage === "inventory" ? "Inventory" : "Expiration"} →</small>
+        </button>
     `).join("");
+    list.querySelectorAll("[data-notification-index]").forEach(element => {
+        element.addEventListener("click", function () {
+            const item = notifications[Number(element.dataset.notificationIndex)];
+            if (!item) return;
+            notificationReadState[item.id] = true;
+            const panel = document.getElementById("notificationPanel");
+            if (panel) panel.hidden = true;
+            if (button) button.setAttribute("aria-expanded", "false");
+            notificationTarget = { id: Number(item.medicineId), page: item.targetPage, until: Date.now() + 3000 };
+            showPage(item.targetPage);
+            const search = document.getElementById(item.targetPage === "inventory" ? "invSearch" : "expirationSearch");
+            const filter = document.getElementById(item.targetPage === "inventory" ? "invFilter" : "expirationFilter");
+            if (search) search.value = item.medicineName;
+            if (filter) filter.value = item.targetPage === "inventory" ? "all" : item.status;
+            if (item.targetPage === "inventory") renderInventory(); else renderExpirationMedicines();
+            renderNotifications();
+        });
+    });
 }
 
 // Refresh the notification count when changing pages.
@@ -5049,7 +5115,7 @@ function refreshDashboardStats() {
 
     if (typeof inventoryMedicines !== "undefined") {
         const availableCount = cashierMode
-            ? inventoryMedicines.filter(m => Number(m.quantity) > 0).length
+            ? inventoryMedicines.filter(isDispensableMedicine).length
             : inventoryMedicines.length;
 
         const lowStockMedicines = inventoryMedicines.filter(medicine =>
