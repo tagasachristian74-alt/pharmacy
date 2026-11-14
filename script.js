@@ -16,38 +16,6 @@ const roleTabAdmin = document.getElementById("roleTabAdmin");
 const roleTabCashier = document.getElementById("roleTabCashier");
 const loginBtnLabel = document.getElementById("loginBtnLabel");
 const demoRoleHint = document.getElementById("demoRoleHint");
-const fillAdminDemo = document.getElementById("fillAdminDemo");
-const fillCashierDemo = document.getElementById("fillCashierDemo");
-
-const FALLBACK_ACCOUNTS = [
-    {
-        user_id: 1,
-        username: "admin",
-        password: "Admin123!",
-        fullName: "Administrator",
-        email: "admin@example.com",
-        role: "admin",
-        status: "Active"
-    },
-    {
-        user_id: 2,
-        username: "cashier",
-        password: "Cashier123!",
-        fullName: "Cashier 1 (Alex Reyes)",
-        email: "cashier@example.com",
-        role: "cashier",
-        status: "Active"
-    },
-    {
-        user_id: 3,
-        username: "cashier2",
-        password: "Cashier123!",
-        fullName: "Cashier 2 (Maria Santos)",
-        email: "maria@example.com",
-        role: "cashier",
-        status: "Active"
-    }
-];
 
 let selectedRole = "admin";
 
@@ -96,26 +64,6 @@ if (roleTabCashier) {
     });
 }
 
-if (fillAdminDemo) {
-    fillAdminDemo.addEventListener("click", function () {
-        selectRole("admin");
-        usernameInput.value = "admin";
-        passwordInput.value = "Admin123!";
-        clearMessage();
-        usernameInput.focus();
-    });
-}
-
-if (fillCashierDemo) {
-    fillCashierDemo.addEventListener("click", function () {
-        selectRole("cashier");
-        usernameInput.value = "cashier";
-        passwordInput.value = "Cashier123!";
-        clearMessage();
-        usernameInput.focus();
-    });
-}
-
 // ========================================
 // SHOW / HIDE PASSWORD
 // ========================================
@@ -145,13 +93,6 @@ function showMessage(text, type) {
 function clearMessage() {
     message.textContent = "";
     message.className = "message";
-}
-
-function getLocalAccounts() {
-    if (window.EPharmaBranding && typeof window.EPharmaBranding.getDemoUsers === "function") {
-        return window.EPharmaBranding.getDemoUsers();
-    }
-    return FALLBACK_ACCOUNTS;
 }
 
 function completeLogin(user) {

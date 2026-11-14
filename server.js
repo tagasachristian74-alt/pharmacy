@@ -30,11 +30,8 @@ function hashPassword(plainText) {
 
 function verifyPassword(plainText, storedHash) {
     const raw = String(storedHash || "");
-    if (!raw.includes(":")) {
-        return raw === String(plainText);
-    }
     const [salt, keyHex] = raw.split(":");
-    if (!salt || !keyHex) return false;
+    if (!/^[a-f0-9]{32}$/i.test(salt || "") || !/^[a-f0-9]{128}$/i.test(keyHex || "") || raw !== `${salt}:${keyHex}`) return false;
     const expected = Buffer.from(keyHex, "hex");
     const actual = crypto.scryptSync(String(plainText), salt, 64);
     if (expected.length !== actual.length) return false;
@@ -227,6 +224,7 @@ function cookieOptions() {
     return { httpOnly: true, sameSite: "strict", secure: process.env.COOKIE_SECURE === "true", path: "/", maxAge: SESSION_TTL_MS };
 }
 app.use("/api", async (req, res, next) => {
+    res.set("Cache-Control", "no-store");
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.headers.origin) {
         try {
             if (new URL(req.headers.origin).host !== req.headers.host) return res.status(403).json({ message: "Cross-origin request denied." });
@@ -534,6 +532,11 @@ app.get("/api/sales", async (req, res) => {
                 s.sale_id,
                 s.status,
                 s.void_reason,
+                s.discount_type,
+                s.customer_name,
+                s.discount_id_number,
+                s.vat_exempt_sales,
+                s.discount_amount,
                 s.total_amount,
                 s.cashier_id,
                 s.cashier_username,
@@ -621,6 +624,12 @@ app.post("/api/sales", async (req, res) => {
         }
 
         const medicine = medicines[0];
+        // MySQL DATE values are strings; compare calendar dates in the pharmacy timezone.
+        const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+        if (medicine.expiry_date && String(medicine.expiry_date).slice(0, 10) < today) {
+            await connection.rollback();
+            return res.status(400).json({ message: "This medicine has expired and cannot be sold." });
+        }
         if (Number(medicine.requires_prescription) === 1 && req.body.prescription_verified !== true) {
             await connection.rollback();
             return res.status(400).json({ message: "Prescription verification is required for this medicine." });
@@ -798,6 +807,7 @@ app.post("/api/purchases", async (req, res) => {
         const {
             medicine_id,
             supplier_name,
+            supplier_id,
             quantity,
             unit_cost
         } = req.body;
@@ -805,13 +815,15 @@ app.post("/api/purchases", async (req, res) => {
         const medicineId = Number(medicine_id);
         const qty = Number(quantity);
         const cost = Number(unit_cost);
-        const supplierName = String(supplier_name || "").trim();
+        let supplierName = String(supplier_name || "").trim();
+        const supplierIdInput = supplier_id == null || supplier_id === "" ? null : Number(supplier_id);
 
         if (
             !Number.isInteger(medicineId) || medicineId <= 0 ||
             !Number.isInteger(qty) || qty <= 0 ||
             !Number.isFinite(cost) || cost <= 0 ||
-            !supplierName
+            (supplierIdInput !== null && (!Number.isSafeInteger(supplierIdInput) || supplierIdInput <= 0)) ||
+            (supplierIdInput === null && !supplierName)
         ) {
             return res.status(400).json({
                 message: "Enter valid purchase details."
@@ -834,24 +846,19 @@ app.post("/api/purchases", async (req, res) => {
             });
         }
 
-        // Find existing supplier or create one.
+        // A purchase must reference an existing active supplier with complete contact details.
         const [suppliers] = await connection.query(
-            "SELECT supplier_id FROM suppliers WHERE supplier_name = ? LIMIT 1",
-            [supplierName]
+            supplierIdInput !== null
+                ? "SELECT supplier_id, supplier_name FROM suppliers WHERE supplier_id = ? AND status = 'Active' FOR UPDATE"
+                : "SELECT supplier_id, supplier_name FROM suppliers WHERE supplier_name = ? AND status = 'Active' LIMIT 1 FOR UPDATE",
+            [supplierIdInput !== null ? supplierIdInput : supplierName]
         );
-
-        let supplierId;
-
-        if (suppliers.length > 0) {
-            supplierId = suppliers[0].supplier_id;
-        } else {
-            const [supplierResult] = await connection.query(
-                "INSERT INTO suppliers (supplier_name) VALUES (?)",
-                [supplierName]
-            );
-
-            supplierId = supplierResult.insertId;
+        if (!suppliers.length) {
+            await connection.rollback();
+            return res.status(400).json({ message: "Choose an existing active supplier. Create the supplier in Suppliers first." });
         }
+        const supplierId = suppliers[0].supplier_id;
+        supplierName = suppliers[0].supplier_name;
 
         const total = Number((qty * cost).toFixed(2));
 
@@ -1555,7 +1562,7 @@ app.post("/api/auth/login", async (req, res) => {
 app.put("/api/account/profile", async (req, res) => {
     try {
         const username = String(req.body?.username || "").trim();
-        const fullName = String(req.body?.fullName || "").trim();
+        const fullName = String(req.body?.fullName ?? req.body?.full_name ?? "").trim();
         const email = String(req.body?.email || "").trim();
 
         if (!username || !fullName) {

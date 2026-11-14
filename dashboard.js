@@ -153,102 +153,35 @@ function isServerDbUnavailable(response, payload) {
     return false;
 }
 
-let activityLogs = (function loadInitialLogs() {
-    try {
-        const raw = localStorage.getItem(DEMO_LOGS_KEY);
-        if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-    } catch {
-        // Ignore storage errors.
-    }
-    const now = Date.now();
-    return [
-        {
-            log_id: 4,
-            username: "cashier",
-            actor_name: "Cashier 1 (Alex Reyes)",
-            role: "cashier",
-            module: "Sales",
-            action: "Completed Sale",
-            details: "Receipt EP-0006: Vitamin C 500mg x5 (₱16.00)",
-            created_at: new Date(now - 3600000).toISOString()
-        },
-        {
-            log_id: 3,
-            username: "cashier2",
-            actor_name: "Cashier 2 (Maria Santos)",
-            role: "cashier",
-            module: "Sales",
-            action: "Completed Sale",
-            details: "Receipt EP-0005: Amoxicillin 500mg x4 (₱32.00)",
-            created_at: new Date(now - 7200000).toISOString()
-        },
-        {
-            log_id: 2,
-            username: "admin",
-            actor_name: "Administrator",
-            role: "admin",
-            module: "Inventory",
-            action: "Updated Medicine",
-            details: "Set 20% discount on Vitamin C 500mg",
-            created_at: new Date(now - 86400000).toISOString()
-        },
-        {
-            log_id: 1,
-            username: "admin",
-            actor_name: "Administrator",
-            role: "admin",
-            module: "Auth",
-            action: "Logged In",
-            details: "Admin session started",
-            created_at: new Date(now - 2 * 86400000).toISOString()
-        }
-    ];
-})();
+let activityLogs = [];
 
-function saveDemoLogs() {
-    try {
-        localStorage.setItem(DEMO_LOGS_KEY, JSON.stringify(activityLogs.slice(0, 200)));
-    } catch {
-        // Ignore storage errors.
-    }
-}
-
-function recordLocalActivity(module, action, details) {
-    const nextId = activityLogs.reduce((m, item) => Math.max(m, Number(item.log_id || 0)), 0) + 1;
-    activityLogs.unshift({
-        log_id: nextId,
-        username: getCurrentUsername(),
-        actor_name: getCurrentDisplayName(),
-        role: getCurrentRole(),
-        module,
-        action,
-        details: details || "",
-        created_at: new Date().toISOString()
-    });
-    saveDemoLogs();
-    if (document.getElementById("activityLogsBody")) {
-        renderActivityLogs();
-    }
-}
-
+// Activity logging is handled by the server; no simulated audit entries.
+function recordLocalActivity() {}
 
 // =========================================
 // 2. DASHBOARD DATE
 // =========================================
+
+function formatPharmacyDate(value, includeTime = false) {
+    const date = typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(value + "T00:00:00") : new Date(value);
+    if (!Number.isFinite(date.getTime())) return "—";
+    const pad = n => String(n).padStart(2, "0");
+    const year = date.getFullYear(), month = pad(date.getMonth() + 1), day = pad(date.getDate());
+    const format = window.EPharmaBranding?.getCachedSettings().dateFormat || "MM/DD/YYYY";
+    const formatted = format === "YYYY-MM-DD" ? `${year}-${month}-${day}` : format === "DD/MM/YYYY" ? `${day}/${month}/${year}` : `${month}/${day}/${year}`;
+    return includeTime ? `${formatted} ${pad(date.getHours())}:${pad(date.getMinutes())}` : formatted;
+}
+function lowStockThreshold(medicine) {
+    const globalLevel = Number(window.EPharmaBranding?.getCachedSettings().lowStockLevel || 10);
+    return Math.max(Number(medicine.reorderLevel) || 0, globalLevel);
+}
 
 function updateDate() {
     const dateElement = document.getElementById("currentDate");
 
     if (!dateElement) return;
 
-    dateElement.textContent = new Date().toLocaleDateString("en-PH", {
-        year: "numeric",
-        month: "long",
-        day: "numeric"
-    });
+    dateElement.textContent = formatPharmacyDate(new Date());
 }
 
 
@@ -1005,6 +938,7 @@ sales: `
                         <th>Quantity</th>
                         <th>Unit Price</th>
                         <th>Discount</th>
+                        <th>Customer / Discount Details</th>
                         <th>Total</th>
                         <th>Status / Action</th>
                     </tr>
@@ -1059,10 +993,9 @@ purchase: `
             </div>
 
             <div class="form-field">
-                <label for="purchaseSupplier">Supplier Name *</label>
-                <input id="purchaseSupplier"
-                       required maxlength="120"
-                       placeholder="Enter supplier name">
+                <label for="purchaseSupplier">Active Supplier *</label>
+                <select id="purchaseSupplier" required><option value="">Select supplier</option></select>
+                <small>Add new suppliers on the Suppliers page first.</small>
             </div>
 
             <div class="form-field">
@@ -1499,7 +1432,7 @@ settings: `
                     </div>
 
                     <div class="form-group">
-                        <label for="settingLowStock">Low Stock Alert Level</label>
+                        <label for="settingLowStock">Low Stock Alert Level (minimum for all medicines)</label>
                         <input id="settingLowStock" type="number"
                             min="1" value="10" required>
                     </div>
@@ -1897,7 +1830,7 @@ let nextMedicineId = 6;
 function getMedicineStatus(medicine) {
     if (medicine.quantity === 0) return "out";
 
-    if (medicine.quantity <= medicine.reorderLevel) return "low";
+    if (medicine.quantity <= lowStockThreshold(medicine)) return "low";
 
     return "in";
 }
@@ -2605,6 +2538,12 @@ function showSalesMessage(text, isError = false) {
     message.style.color = isError ? "#B91C1C" : "#067D70";
 }
 
+function describeAppliedDiscount(calculated) {
+    if (calculated.applied === "statutory") return "20% statutory discount + VAT exemption";
+    if (calculated.applied === "promotion") return `${calculated.discountPercent}% promotional discount`;
+    return "No discount";
+}
+
 function renderPosReceipt(receiptInfo) {
     const card = document.getElementById("posReceiptCard");
     const details = document.getElementById("posReceiptDetails");
@@ -2639,13 +2578,14 @@ function renderPosReceipt(receiptInfo) {
            <div><span>VAT-exempt sales</span><strong>₱${Number(receiptInfo.vatExemptSales).toFixed(2)}</strong></div>
            <div><span>Discount amount</span><strong>₱${Number(receiptInfo.discountAmount).toFixed(2)}</strong></div>` : "";
     details.innerHTML = `
+        ${receiptInfo.status === "VOIDED" ? `<div><strong>VOIDED</strong><span>${escapeSupplierText(receiptInfo.voidReason || "")}</span></div>` : ""}
         <div><span>Receipt No.</span><strong>${escapeSupplierText(receiptInfo.receipt)}</strong></div>
         <div><span>Date & Time</span><strong>${escapeSupplierText(receiptInfo.date)}</strong></div>
         <div><span>Cashier</span><strong>${escapeSupplierText(receiptInfo.cashierName)}</strong></div>
         <div><span>Medicine</span><strong>${escapeSupplierText(receiptInfo.medicineName)} × ${receiptInfo.quantity}</strong></div>
         <div><span>Unit Price</span><strong>₱${receiptInfo.unitPrice.toFixed(2)}${receiptInfo.discount > 0 ? ` (${receiptInfo.discount}% OFF)` : ""}</strong></div>
         ${customerRows}
-        <div><span>Total Paid</span><strong>₱${receiptInfo.total.toFixed(2)}</strong></div>
+        <div><span>Total</span><strong>₱${receiptInfo.total.toFixed(2)}</strong></div>
         ${changeRow}
     `;
 
@@ -2729,7 +2669,7 @@ function getFilteredSalesRecords() {
 function exportSalesReportCsv() {
     if (isCashierRole()) return;
     const rows = getFilteredSalesRecords();
-    const headers = ["Receipt No", "Date", "Cashier", "Username", "Medicine", "Quantity", "Unit Price", "Discount %", "Total", "Status", "Void Reason"];
+    const headers = ["Receipt No", "Date", "Cashier", "Username", "Medicine", "Quantity", "Unit Price", "Discount %", "Customer Type", "Customer Name", "Discount ID", "VAT Exempt Sales", "Discount Amount", "Total", "Status", "Void Reason"];
     const csvLines = [headers.join(",")];
 
     rows.forEach(r => {
@@ -2742,10 +2682,16 @@ function exportSalesReportCsv() {
             r.quantity,
             Number(r.unitPrice).toFixed(2),
             normalizeDiscountPercent(r.discount),
+            r.discountType, r.customerName, r.discountId,
+            Number(r.vatExemptSales).toFixed(2), Number(r.discountAmount).toFixed(2),
             Number(r.total).toFixed(2),
             r.status || "COMPLETED",
             r.voidReason || ""
-        ].map(val => `"${String(val).replace(/"/g, '""')}"`).join(",");
+        ].map(val => {
+            let text = String(val ?? "");
+            if (/^[\s]*[=+@-]/.test(text)) text = "'" + text;
+            return `"${text.replace(/"/g, '""')}"`;
+        }).join(",");
         csvLines.push(line);
     });
 
@@ -2903,9 +2849,10 @@ async function initializeSalesPage() {
             : 0;
         const customer = customerType?.value || "regular";
         const selectedPromo = customer === "regular" ? discount : normalizeDiscountPercent(medicine?.discount || 0);
-        const finalUnitPrice = medicine && Number.isInteger(quantity) && quantity > 0
-            ? window.EPharmaPricing.calculate(originalPrice, quantity, selectedPromo, customer).unitPrice
-            : 0;
+        const calculated = medicine && Number.isInteger(quantity) && quantity > 0
+            ? window.EPharmaPricing.calculate(originalPrice, quantity, selectedPromo, customer)
+            : null;
+        const finalUnitPrice = calculated ? calculated.unitPrice : 0;
         const needsCustomer = customer !== "regular";
         document.getElementById("salesCustomerNameField").hidden = !needsCustomer;
         document.getElementById("salesCustomerIdField").hidden = !needsCustomer;
@@ -2947,7 +2894,8 @@ async function initializeSalesPage() {
         if (stockInfo) {
             stockInfo.textContent = medicine
                 ? "Available stock: " + medicine.quantity +
-                  (discount > 0 ? " · Discount applied: " + discount + "%" : "")
+                  (calculated ? " · " + describeAppliedDiscount(calculated) : "") +
+                  (medicine.expiry && getExpirationStatus(medicine.expiry).status !== "Safe" ? " · " + getExpirationStatus(medicine.expiry).status : "")
                 : "";
         }
 
@@ -2977,10 +2925,11 @@ async function initializeSalesPage() {
         });
     }
 
+    window.onafterprint = function () { document.body.classList.remove("printing-receipt"); };
     if (printBtn) {
         printBtn.addEventListener("click", function () {
             document.body.classList.add("printing-receipt");
-            try { window.print(); } finally { document.body.classList.remove("printing-receipt"); }
+            try { window.print(); } catch (error) { document.body.classList.remove("printing-receipt"); throw error; }
         });
     }
 
@@ -3017,6 +2966,10 @@ async function initializeSalesPage() {
             return;
         }
 
+        if (medicine.expiry && getExpirationStatus(medicine.expiry).status === "Expired") {
+            alert("This medicine has expired and cannot be sold.");
+            return;
+        }
         if (quantity > medicine.quantity) {
             alert(
                 "Insufficient stock. Available quantity: " +
@@ -3058,7 +3011,7 @@ async function initializeSalesPage() {
             "Cashier: " + cashierName +
             "\nMedicine: " + medicine.name +
             "\nQuantity: " + quantity +
-            (discount > 0 ? "\nDiscount: " + discount + "%" : "") +
+            "\nDiscount: " + describeAppliedDiscount(computed) +
             "\nTotal: ₱" + total.toFixed(2)
         );
 
@@ -3156,7 +3109,7 @@ async function initializeSalesPage() {
             }
 
             const receiptNo = "EP-" + String(result.sale_id).padStart(4, "0");
-            const nowStr = new Date().toLocaleString("en-PH");
+            const nowStr = formatPharmacyDate(new Date(), true);
 
             renderPosReceipt({
                 receipt: receiptNo,
@@ -3236,7 +3189,7 @@ function renderSalesRecords() {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
 
-        cell.colSpan = 9;
+        cell.colSpan = 10;
         cell.className = "inventory-empty";
         cell.textContent = isCashierRole()
             ? "No transactions found for your account."
@@ -3277,6 +3230,9 @@ function renderSalesRecords() {
         }
         discountCell.appendChild(discountBadge);
         row.appendChild(discountCell);
+        const customerCell = document.createElement("td");
+        customerCell.textContent = sale.discountType === "regular" ? "Regular" : `${sale.discountType === "senior" ? "Senior" : "PWD"} · ${sale.customerName || "—"} · ID: ${sale.discountId || "—"} · VAT exempt: ₱${sale.vatExemptSales.toFixed(2)} · Discount: ₱${sale.discountAmount.toFixed(2)}`;
+        row.appendChild(customerCell);
 
         const totalCell = document.createElement("td");
         const totalStrong = document.createElement("strong");
@@ -3284,8 +3240,17 @@ function renderSalesRecords() {
         totalCell.appendChild(totalStrong);
         row.appendChild(totalCell);
         const statusCell = document.createElement("td");
+        const reprint = document.createElement("button");
+        reprint.type = "button";
+        reprint.textContent = "View / Reprint";
+        reprint.addEventListener("click", () => {
+            document.getElementById("posCheckoutSection").hidden = false;
+            renderPosReceipt({ ...sale, cashTendered: null, changeAmount: 0, appliedDiscount: sale.vatExemptSales > 0 ? "statutory" : "promotion" });
+            document.getElementById("posReceiptCard").scrollIntoView({ behavior: "smooth" });
+        });
+        statusCell.appendChild(reprint);
         if (sale.status === "VOIDED") {
-            statusCell.textContent = "VOIDED" + (sale.voidReason ? " — " + sale.voidReason : "");
+            statusCell.appendChild(document.createTextNode(" VOIDED" + (sale.voidReason ? " — " + sale.voidReason : "")));
         } else if (!isCashierRole()) {
             const button = document.createElement("button");
             button.type = "button";
@@ -3309,7 +3274,7 @@ function renderSalesRecords() {
                 } catch (error) { showSalesMessage(error.message, true); button.disabled = false; }
             });
             statusCell.appendChild(button);
-        } else statusCell.textContent = "Completed";
+        } else statusCell.appendChild(document.createTextNode(" Completed"));
         row.appendChild(statusCell);
         tbody.appendChild(row);
     });
@@ -3402,14 +3367,15 @@ async function initializePurchasePage() {
             return item.id === medicineId;
         });
 
-        const supplier = document.getElementById("purchaseSupplier")
-            .value.trim();
+        const supplierSelect = document.getElementById("purchaseSupplier");
+        const supplierId = Number(supplierSelect.value);
+        const supplier = supplierSelect.selectedOptions[0]?.textContent || "";
 
         const quantity = Number(quantityInput.value);
         const unitCost = Number(costInput.value);
 
-        if (!medicine || !supplier) {
-            alert("Please select a medicine and enter the supplier name.");
+        if (!medicine || !supplierId) {
+            alert("Please select a medicine and an active supplier.");
             return;
         }
 
@@ -3442,7 +3408,7 @@ async function initializePurchasePage() {
                 },
                 body: JSON.stringify({
                     medicine_id: medicine.id,
-                    supplier_name: supplier,
+                    supplier_id: supplierId,
                     quantity: quantity,
                     unit_cost: unitCost
                 })
@@ -3497,6 +3463,20 @@ async function initializePurchasePage() {
         }
     });
 
+    const supplierSelect = document.getElementById("purchaseSupplier");
+    try {
+        const response = await fetch("/api/suppliers");
+        if (!response.ok) throw new Error("Unable to load suppliers.");
+        const suppliers = await response.json();
+        suppliers.filter(item => item.status === "Active").forEach(item => {
+            const option = document.createElement("option");
+            option.value = String(item.supplier_id);
+            option.textContent = item.supplier_name;
+            supplierSelect.appendChild(option);
+        });
+    } catch (error) {
+        document.getElementById("purchaseMessage").textContent = "Unable to load active suppliers. Check the database connection.";
+    }
     await loadPurchaseMedicines();
     await loadPurchaseRecordsFromDatabase();
     updatePurchaseTotal();
@@ -3941,13 +3921,8 @@ async function initializeExpirationPage() {
 }
 
 function getExpirationStatus(expiryDate) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const expiry = new Date(expiryDate + "T00:00:00");
-    const daysRemaining = Math.ceil(
-        (expiry.getTime() - today.getTime()) / 86400000
-    );
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    const daysRemaining = Math.round((Date.parse(expiryDate + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
 
     let status;
 
@@ -4042,7 +4017,7 @@ function renderExpirationMedicines() {
                 <td>${escapeSupplierText(item.batch || "—")}</td>
                 <td>${escapeSupplierText(item.shelf || "Not specified")}</td>
                 <td>${item.quantity}</td>
-                <td>${new Date(item.expiry + "T00:00:00").toLocaleDateString()}</td>
+                <td>${formatPharmacyDate(item.expiry)}</td>
                 <td>${remainingText}</td>
                 <td>
                     <span class="status-badge ${badgeClass}">
@@ -4297,7 +4272,9 @@ async function initializeSettingsPage() {
             lowStockLevel: lowStock
         });
         recordLocalActivity("Settings", "Updated Preferences", `Low stock threshold set to ${lowStock}`);
-        showSettingsMessage("System preferences saved.", false);
+        updateDate();
+        refreshDashboardStats();
+        showSettingsMessage("System preferences saved. Stock alerts use the higher of this level and each medicine’s reorder level.", false);
     };
 }
 
@@ -4655,7 +4632,7 @@ function renderActivityLogs() {
     }
 
     tbody.innerHTML = filtered.map(log => {
-        const dt = new Date(log.created_at).toLocaleString("en-PH");
+        const dt = formatPharmacyDate(log.created_at, true);
         return `
             <tr>
                 <td>${escapeSupplierText(dt)}</td>
@@ -4696,7 +4673,7 @@ async function initializeActivityLogsPage() {
             activityLogs = rows;
         }
     } catch {
-        // Keep local preview activityLogs.
+        activityLogs = [];
     }
 
     renderActivityLogs();
@@ -4912,7 +4889,7 @@ function getNotifications() {
                     type: "stock"
                 });
             } else if (
-                Number(medicine.quantity) <= Number(medicine.reorderLevel)
+                Number(medicine.quantity) <= lowStockThreshold(medicine)
             ) {
                 notifications.push({
                     id: `stock-${medicine.id}`,
@@ -4931,14 +4908,14 @@ function getNotifications() {
 
             if (result.status === "Expired") {
                 notifications.push({
-                    id: `expired-${medicine.batch}`,
+                    id: `expired-${medicine.id}`,
                     title: "Expired Medicine",
                     message: `${medicine.name} (${medicine.batch}) has expired.`,
                     type: "expiry"
                 });
             } else if (result.status === "Expiring Soon") {
                 notifications.push({
-                    id: `expiring-${medicine.batch}`,
+                    id: `expiring-${medicine.id}`,
                     title: "Expiring Soon",
                     message: `${medicine.name} expires in ${result.daysRemaining} days.`,
                     type: "expiry"
@@ -4965,10 +4942,11 @@ function renderNotifications() {
     const expiryAlerts = notifications.filter(item => item.type === "expiry").length;
     const button = document.getElementById("notificationButton");
     if (button) button.setAttribute("aria-label", `Alerts: ${stockAlerts} low or out of stock, ${expiryAlerts} near-expiry or expired`);
-    const alertCount = notifications.length;
-    count.textContent = alertCount > 99 ? "99+" : String(alertCount);
-    count.style.display = alertCount > 0 ? "inline-flex" : "none";
+    count.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+    count.style.display = unreadCount > 0 ? "inline-flex" : "none";
     count.title = `${stockAlerts} stock alerts, ${expiryAlerts} expiration alerts (${unreadCount} unread)`;
+    const header = document.getElementById("notificationTotal");
+    if (header) header.textContent = `${notifications.length} active alerts` ;
 
     if (notifications.length === 0) {
         list.innerHTML = `
@@ -5021,7 +4999,7 @@ function refreshDashboardStats() {
             : inventoryMedicines.length;
 
         const lowStockMedicines = inventoryMedicines.filter(medicine =>
-            Number(medicine.quantity) <= Number(medicine.reorderLevel)
+            Number(medicine.quantity) <= lowStockThreshold(medicine)
         );
 
         if (totalMedicinesElement) {
@@ -5212,9 +5190,14 @@ async function loadSalesRecordsFromDatabase() {
                 status: row.status || "COMPLETED",
                 cashierId: row.cashier_id,
                 voidReason: row.void_reason || "",
+                discountType: row.discount_type || "regular",
+                customerName: row.customer_name || "",
+                discountId: row.discount_id_number || "",
+                vatExemptSales: Number(row.vat_exempt_sales || 0),
+                discountAmount: Number(row.discount_amount || 0),
                 receipt: "EP-" +
                     String(row.sale_id).padStart(4, "0"),
-                date: new Date(row.sale_date).toLocaleString("en-PH"),
+                date: formatPharmacyDate(row.sale_date, true),
                 timestamp: new Date(row.sale_date).getTime(),
                 cashierUsername: row.cashier_username || "",
                 cashierName: row.cashier_name || "Admin",
@@ -5267,7 +5250,7 @@ async function loadPurchaseRecordsFromDatabase() {
             return {
                 purchaseNo: "PUR-" +
                     String(row.purchase_id).padStart(4, "0"),
-                date: new Date(row.purchase_date).toLocaleString("en-PH"),
+                date: formatPharmacyDate(row.purchase_date, true),
                 medicineId: Number(row.medicine_id),
                 medicineName: row.medicine_name,
                 supplier: row.supplier_name || "Unknown",

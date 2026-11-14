@@ -6,35 +6,7 @@
     const DEMO_USERS_KEY = "epharmaDemoUsers";
     const DEFAULT_LOGO_PATH = "assets/default-logo.svg";
 
-    const DEFAULT_DEMO_USERS = [
-        {
-            user_id: 1,
-            username: "admin",
-            password: "Admin123!",
-            fullName: "Administrator",
-            email: "admin@example.com",
-            role: "admin",
-            status: "Active"
-        },
-        {
-            user_id: 2,
-            username: "cashier",
-            password: "Cashier123!",
-            fullName: "Cashier 1 (Alex Reyes)",
-            email: "cashier@example.com",
-            role: "cashier",
-            status: "Active"
-        },
-        {
-            user_id: 3,
-            username: "cashier2",
-            password: "Cashier123!",
-            fullName: "Cashier 2 (Maria Santos)",
-            email: "maria@example.com",
-            role: "cashier",
-            status: "Active"
-        }
-    ];
+    const DEFAULT_DEMO_USERS = []; // No offline authentication accounts.
 
     const DEFAULT_SETTINGS = {
         pharmacyName: "E-Pharma",
@@ -578,7 +550,7 @@
                         const ctx = canvas.getContext("2d");
                         if (!ctx) throw new Error("Image compression is not supported in this browser.");
                         ctx.drawImage(image, 0, 0, width, height);
-                        // Prefer WebP; PNG fallback keeps transparency where WebP is unavailable.
+                        // Unsupported WebP encoders typically return PNG; both preserve transparency.
                         for (const quality of [0.85, 0.7, 0.5, 0.35]) {
                             const result = canvas.toDataURL("image/webp", quality);
                             if (result.length < limit) return resolve(result);

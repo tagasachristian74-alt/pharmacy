@@ -56,6 +56,10 @@ test('Rx verification, senior price and admin void restore stock once', async ()
   response = await req('/api/sales',{method:'POST',headers,body:JSON.stringify({...payload,prescription_verified:true})});
   assert.equal(response.status,201); const sale=await response.json();
   assert.equal(sale.total_amount,160); assert.equal(sale.vat_exempt_sales,200); assert.equal(sale.discount_amount,40);
+  const history = await (await req('/api/sales',{headers})).json();
+  const saved = history.find(row => row.sale_id === sale.sale_id);
+  assert.equal(saved.discount_type, 'senior'); assert.equal(saved.customer_name, 'Test Person');
+  assert.equal(saved.discount_id_number, 'TEST-ID'); assert.equal(saved.discount_amount, 40);
   let stock = await (await req('/api/medicines',{headers})).json(); assert.equal(stock[0].quantity,8);
   assert.equal((await req(`/api/sales/${sale.sale_id}/void`,{method:'POST',headers,body:JSON.stringify({reason:'mistake'})})).status,403);
   const admin = await login('admin','test-admin-password');
@@ -63,4 +67,24 @@ test('Rx verification, senior price and admin void restore stock once', async ()
   assert.equal((await req(`/api/sales/${sale.sale_id}/void`,{method:'POST',headers:adminHeaders,body:JSON.stringify({reason:'mistake'})})).status,200);
   assert.equal((await req(`/api/sales/${sale.sale_id}/void`,{method:'POST',headers:adminHeaders,body:JSON.stringify({reason:'again'})})).status,409);
   stock = await (await req('/api/medicines',{headers})).json(); assert.equal(stock[0].quantity,10);
+});
+
+test('profile supports both field styles and cannot target another account', async () => {
+  const cookie = await login('cashier','test-cashier-password');
+  const headers = {cookie, 'content-type':'application/json'};
+  let result = await req('/api/account/profile', {method:'PUT',headers,body:JSON.stringify({username:'admin',full_name:'Test Cashier',email:'test@example.com'})});
+  assert.equal(result.status,200);
+  let data = await result.json(); assert.equal(data.user.username,'cashier'); assert.equal(data.user.fullName,'Test Cashier');
+  result = await req('/api/account/profile', {method:'PUT',headers,body:JSON.stringify({fullName:'Updated Cashier'})});
+  assert.equal(result.status,200); assert.equal((await result.json()).user.fullName,'Updated Cashier');
+});
+test('purchase requires an existing active supplier and expired medicines cannot be sold', async () => {
+  const cookie = await login('admin','test-admin-password');
+  const headers = {cookie,'content-type':'application/json'};
+  const purchase = {medicine_id:1, quantity:2, unit_cost:5};
+  let response = await req('/api/purchases',{method:'POST',headers,body:JSON.stringify({...purchase,supplier_id:1})}); assert.equal(response.status,201);
+  response = await req('/api/purchases',{method:'POST',headers,body:JSON.stringify({...purchase,supplier_id:2})}); assert.equal(response.status,400);
+  response = await req('/api/purchases',{method:'POST',headers,body:JSON.stringify({...purchase,supplier_name:'Unknown supplier'})}); assert.equal(response.status,400);
+  response = await req('/api/sales',{method:'POST',headers,body:JSON.stringify({medicine_id:2,quantity:1,prescription_verified:true})});
+  assert.equal(response.status,400); assert.match((await response.json()).message,/expired/i);
 });

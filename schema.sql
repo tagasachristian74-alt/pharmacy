@@ -151,5 +151,4 @@ CREATE TABLE IF NOT EXISTS activity_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Note: Default demo users (admin / Admin123!, cashier / Cashier123!, cashier2 / Cashier123!)
--- are automatically seeded securely by server.js if the users table is empty.
+-- On an empty users table, server.js creates an admin using DB_ADMIN_PASSWORD from the environment.

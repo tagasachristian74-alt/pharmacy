@@ -53,3 +53,11 @@ The POS currently sells one medicine per transaction. For a Senior/PWD customer 
 Mark medicines that require a prescription in Inventory. The cashier must check “Prescription verified” before checkout; the system does not authenticate or retain a prescription. Admins can void a completed sale with a reason, restoring its stock; voided sales remain in reports and are excluded from dashboard/net totals. Review physical stock and the return's suitability before reselling any medicine. Print using the receipt button and select 58 mm or 80 mm paper in your printer settings.
 
 Cashier presence shows activity from the current server process and becomes offline after 30 minutes without an authenticated API request; it is not a reliable attendance record. The session has an eight-hour maximum lifetime. Audit logging is best effort and is not a tamper-proof audit system. Existing database tables are upgraded on startup/API access, requiring ALTER and foreign-key privileges; back up before upgrading. Existing sales retain their original cashier names and have a null cashier ID until separately reconciled.
+
+## Inventory, purchases and reports
+
+Purchases must use an existing **Active** supplier; create a supplier under Suppliers before placing a purchase. The inventory reorder level is per medicine. The global Low Stock Alert Level acts as a minimum: the higher of the global level and the medicine's reorder level triggers an alert. Date Format is used for dashboard and transaction dates. Expiration dates use the Asia/Manila calendar: stock is blocked from sale starting the day after its expiration date, and stock expiring within 90 days is flagged. This version still tracks only one batch per medicine.
+
+The Sales report and its CSV include Senior/PWD customer names and ID numbers. Treat exports and printed receipts as sensitive personal data; restrict and secure access. View / Reprint shows a past record, including its void status. Cash tendered and change are not stored, so a reprinted past receipt cannot show those details.
+
+Plaintext stored passwords are no longer accepted. Accounts created by this version use scrypt hashes. If upgrading an old database containing plaintext passwords, make a backup and have an administrator reset those accounts securely before use; do not post passwords or database contents in support requests.
