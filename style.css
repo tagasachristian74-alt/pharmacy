@@ -534,4 +534,4 @@ body {
         font-size: 24px;
     }
 }
-.login-hero-img { display: block; width: min(100%, 280px); max-height: 230px; object-fit: cover; border-radius: 16px; border: 1px solid rgba(143,212,203,.18); margin-top: 24px; }
+.login-hero-img { display: block; width: min(100%, 240px); height: auto; border-radius: 16px; border: 1px solid rgba(143,212,203,.18); margin-top: 24px; }
