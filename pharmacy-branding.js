@@ -510,7 +510,7 @@
                     const serverSaved = cacheSettings(data.settings);
                     applyBranding(serverSaved);
                     syncedToServer = true;
-                    return { settings: serverSaved, syncedToServer: true };
+                    return { settings: serverSaved, syncedToServer: true, warning: data.warning || null };
                 }
             }
         } catch (error) {
@@ -549,67 +549,47 @@
 
         const dataUrl = await readFileAsDataUrl(file);
 
-        // Keep SVG and small GIF/raster logos untouched.
+        // Preserve SVG and GIF exactly (including animation). Raster images are resized.
         if (file.type === "image/svg+xml") {
-            const b64 = dataUrl.split(",")[1] || "";
-            try {
-                const decoded = atob(b64);
-                if (/<script[\s>]|on\w+\s*=|javascript:/i.test(decoded)) {
-                    throw new Error("Unsupported SVG content.");
-                }
-            } catch (err) {
-                if (err.message === "Unsupported SVG content.") {
-                    throw err;
-                }
-            }
+            const decoded = atob(dataUrl.split(",")[1] || "");
+            if (/<script[\s>]|on\w+\s*=|javascript:/i.test(decoded)) throw new Error("Unsupported SVG content.");
             return dataUrl;
         }
-
-        if (file.type === "image/gif" && file.size <= 350 * 1024) {
-            return dataUrl;
+        if (file.type === "image/gif") return dataUrl;
+        if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+            throw new Error("Please select a PNG, JPG, WebP, GIF, or SVG image.");
         }
-
-        return new Promise((resolve) => {
-            const img = new Image();
-            img.onload = () => {
-                const maxDim = 512;
-                let width = img.naturalWidth || img.width;
-                let height = img.naturalHeight || img.height;
-
-                if (width <= maxDim && height <= maxDim && file.size <= 300 * 1024) {
-                    resolve(dataUrl);
-                    return;
-                }
-
-                if (width > height && width > maxDim) {
-                    height = Math.round((height * maxDim) / width);
-                    width = maxDim;
-                } else if (height > maxDim) {
-                    width = Math.round((width * maxDim) / height);
-                    height = maxDim;
-                }
-
-                const canvas = document.createElement("canvas");
-                canvas.width = Math.max(1, width);
-                canvas.height = Math.max(1, height);
-
-                const ctx = canvas.getContext("2d");
-                if (!ctx) {
-                    resolve(dataUrl);
-                    return;
-                }
-
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-                const outputType = file.type === "image/jpeg" ? "image/jpeg" : "image/png";
-                const optimized = outputType === "image/jpeg"
-                    ? canvas.toDataURL("image/jpeg", 0.9)
-                    : canvas.toDataURL("image/png");
-
-                resolve(optimized.length < dataUrl.length ? optimized : dataUrl);
+        return new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onerror = () => reject(new Error("Could not decode the image."));
+            image.onload = () => {
+                try {
+                    let width = image.naturalWidth || image.width;
+                    let height = image.naturalHeight || image.height;
+                    if (!width || !height) throw new Error("Invalid image dimensions.");
+                    const scale = Math.min(1, 400 / width, 400 / height);
+                    width = Math.max(1, Math.round(width * scale));
+                    height = Math.max(1, Math.round(height * scale));
+                    const canvas = document.createElement("canvas");
+                    const limit = 150 * 1024;
+                    for (let attempt = 0; attempt < 8; attempt++) {
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext("2d");
+                        if (!ctx) throw new Error("Image compression is not supported in this browser.");
+                        ctx.drawImage(image, 0, 0, width, height);
+                        // Prefer WebP; PNG fallback keeps transparency where WebP is unavailable.
+                        for (const quality of [0.85, 0.7, 0.5, 0.35]) {
+                            const result = canvas.toDataURL("image/webp", quality);
+                            if (result.length < limit) return resolve(result);
+                        }
+                        width = Math.max(1, Math.floor(width * 0.75));
+                        height = Math.max(1, Math.floor(height * 0.75));
+                    }
+                    reject(new Error("Unable to compress this logo below 150 KB; try another image."));
+                } catch (error) { reject(error); }
             };
-            img.onerror = () => resolve(dataUrl);
-            img.src = dataUrl;
+            image.src = dataUrl;
         });
     }
 

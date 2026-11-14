@@ -26,6 +26,8 @@ test('API access requires a real server session and private files stay private',
   assert.equal((await req('/api/medicines')).status,401);
   for (const p of ['/server.js','/schema.sql','/data/settings.json','/.env']) assert.equal((await req(p)).status,404);
   assert.equal((await req('/dashboard.html')).status,200);
+  assert.equal((await req('/inventory.css')).status,200);
+  assert.equal((await req('/pricing.js')).status,200);
 });
 test('cashier permissions, identity and logout are enforced server-side', async () => {
   const cookie = await login('cashier','test-cashier-password');
@@ -42,4 +44,23 @@ test('admin can access admin routes and cross-origin writes are rejected', async
   const cookie = await login('admin','test-admin-password');
   assert.equal((await req('/api/users',{headers:{cookie}})).status,200);
   assert.equal((await req('/api/users',{method:'POST',headers:{cookie,origin:'https://attacker.example','content-type':'application/json'},body:'{}'})).status,403);
+});
+test('Rx verification, senior price and admin void restore stock once', async () => {
+  const cashier = await login('cashier','test-cashier-password');
+  const headers = {cookie:cashier,'content-type':'application/json'};
+  const payload = {medicine_id:1, quantity:2, discount_percent:0, discount_type:'senior',customer_name:'Test Person',discount_id_number:'TEST-ID'};
+  let response = await req('/api/sales',{method:'POST',headers,body:JSON.stringify(payload)});
+  assert.equal(response.status,400); // Rx must be verified on the server.
+  response = await req('/api/sales',{method:'POST',headers,body:JSON.stringify({...payload,customer_name:'',prescription_verified:true})});
+  assert.equal(response.status,400); // identity is required for eligible customer type.
+  response = await req('/api/sales',{method:'POST',headers,body:JSON.stringify({...payload,prescription_verified:true})});
+  assert.equal(response.status,201); const sale=await response.json();
+  assert.equal(sale.total_amount,160); assert.equal(sale.vat_exempt_sales,200); assert.equal(sale.discount_amount,40);
+  let stock = await (await req('/api/medicines',{headers})).json(); assert.equal(stock[0].quantity,8);
+  assert.equal((await req(`/api/sales/${sale.sale_id}/void`,{method:'POST',headers,body:JSON.stringify({reason:'mistake'})})).status,403);
+  const admin = await login('admin','test-admin-password');
+  const adminHeaders = {cookie:admin,'content-type':'application/json'};
+  assert.equal((await req(`/api/sales/${sale.sale_id}/void`,{method:'POST',headers:adminHeaders,body:JSON.stringify({reason:'mistake'})})).status,200);
+  assert.equal((await req(`/api/sales/${sale.sale_id}/void`,{method:'POST',headers:adminHeaders,body:JSON.stringify({reason:'again'})})).status,409);
+  stock = await (await req('/api/medicines',{headers})).json(); assert.equal(stock[0].quantity,10);
 });

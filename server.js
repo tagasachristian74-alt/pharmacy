@@ -2,6 +2,7 @@
 const express = require("express");
 const mysql = require("mysql2/promise");
 const crypto = require("crypto");
+const pricing = require("./pricing");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
@@ -14,7 +15,7 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "10mb" }));
 
 // Serve only public app assets; never expose source, configuration or data files.
-const publicFiles = new Set(["/", "/index.html", "/dashboard.html", "/style.css", "/dashboard.css", "/inventroy.css", "/script.js", "/dashboard.js", "/pharmacy-branding.js"]);
+const publicFiles = new Set(["/", "/index.html", "/dashboard.html", "/style.css", "/dashboard.css", "/inventory.css", "/script.js", "/pricing.js", "/dashboard.js", "/pharmacy-branding.js"]);
 app.use((req, res, next) => {
     if (req.path.startsWith("/api") || publicFiles.has(req.path) || /^\/assets\/[A-Za-z0-9_.-]+$/.test(req.path)) return next();
     return res.sendStatus(404);
@@ -84,11 +85,25 @@ function sendDbError(res, error, fallbackMessage) {
 }
 
 let schemaUpgraded = false;
+let schemaUpgradePromise = null;
 async function ensureSchemaUpgrades() {
     if (schemaUpgraded) return;
+    if (!schemaUpgradePromise) schemaUpgradePromise = performSchemaUpgrades();
+    try { await schemaUpgradePromise; } finally { schemaUpgradePromise = null; }
+}
+async function performSchemaUpgrades() {
 
     const dbName = process.env.DB_NAME || "epharma_db";
     const checks = [
+        { table: "sales", column: "discount_type", sql: "ALTER TABLE sales ADD COLUMN discount_type ENUM('regular', 'senior', 'pwd') NOT NULL DEFAULT 'regular'" },
+        { table: "sales", column: "customer_name", sql: "ALTER TABLE sales ADD COLUMN customer_name VARCHAR(120) NULL" },
+        { table: "sales", column: "discount_id_number", sql: "ALTER TABLE sales ADD COLUMN discount_id_number VARCHAR(100) NULL" },
+        { table: "sales", column: "vat_exempt_sales", sql: "ALTER TABLE sales ADD COLUMN vat_exempt_sales DECIMAL(10,2) NOT NULL DEFAULT 0.00" },
+        { table: "sales", column: "discount_amount", sql: "ALTER TABLE sales ADD COLUMN discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00" },
+        { table: "sales", column: "status", sql: "ALTER TABLE sales ADD COLUMN status ENUM('COMPLETED', 'VOIDED') NOT NULL DEFAULT 'COMPLETED'" },
+        { table: "sales", column: "void_reason", sql: "ALTER TABLE sales ADD COLUMN void_reason VARCHAR(255) NULL" },
+        { table: "medicines", column: "requires_prescription", sql: "ALTER TABLE medicines ADD COLUMN requires_prescription TINYINT(1) NOT NULL DEFAULT 0" },
+        { table: "sales", column: "cashier_id", sql: "ALTER TABLE sales ADD COLUMN cashier_id INT NULL" },
         { table: "medicines", column: "shelf_location", sql: "ALTER TABLE medicines ADD COLUMN shelf_location VARCHAR(100) DEFAULT NULL" },
         {
             table: "medicines",
@@ -156,6 +171,14 @@ async function ensureSchemaUpgrades() {
         )
     `);
 
+    const [cashierFk] = await db.query(
+        "SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'sales' AND COLUMN_NAME = 'cashier_id' AND REFERENCED_TABLE_NAME = 'users'",
+        [dbName]
+    );
+    if (cashierFk.length === 0) {
+        await db.query("ALTER TABLE sales ADD CONSTRAINT fk_sales_cashier FOREIGN KEY (cashier_id) REFERENCES users(user_id) ON DELETE SET NULL");
+    }
+
     const [countRows] = await db.query("SELECT COUNT(*) AS cnt FROM users");
     if (Number(countRows[0]?.cnt || 0) === 0) {
         const password = process.env.DB_ADMIN_PASSWORD || "";
@@ -194,6 +217,7 @@ async function recordActivityLog({ username, actor_name, role, module, action, d
 // Server-issued, HttpOnly sessions. Stored in memory: restart logs everyone out.
 const sessions = new Map();
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const SESSION_IDLE_MS = 30 * 60 * 1000;
 const loginAttempts = new Map();
 function cookieToken(req) {
     const match = (req.headers.cookie || "").match(/(?:^|;\s*)epharma_session=([a-f0-9]{64})(?:;|$)/);
@@ -211,11 +235,11 @@ app.use("/api", async (req, res, next) => {
     if ((req.path === "/auth/login" && req.method === "POST") || (req.path === "/settings" && req.method === "GET") || (req.path === "/" && req.method === "GET")) return next();
     const token = cookieToken(req);
     const session = sessions.get(token);
-    if (!session || session.expires <= Date.now()) {
+    if (!session || session.expires <= Date.now() || Date.now() - session.last_active_at >= SESSION_IDLE_MS) {
         if (token) sessions.delete(token);
         return res.status(401).json({ message: "Please sign in." });
     }
-    if (req.path === "/auth/logout" && req.method === "POST") return next();
+    if (req.path === "/auth/logout" && req.method === "POST") { req.session = session; return next(); }
     try {
         const [rows] = await db.query("SELECT user_id, username, full_name, email, role, status, password_hash FROM users WHERE user_id = ? LIMIT 1", [session.userId]);
         const user = rows[0];
@@ -223,6 +247,7 @@ app.use("/api", async (req, res, next) => {
             sessions.delete(token);
             return res.status(401).json({ message: "Session expired. Please sign in again." });
         }
+        session.last_active_at = Date.now();
         req.user = user;
         if (req.path === "/auth/session" || req.path === "/auth/logout") return next();
         if (user.role !== "admin") {
@@ -239,8 +264,10 @@ app.get("/api/auth/session", (req, res) => res.json({ user: {
     user_id: req.user.user_id, username: req.user.username, fullName: req.user.full_name,
     email: req.user.email || "", role: req.user.role
 } }));
-app.post("/api/auth/logout", (req, res) => {
+app.post("/api/auth/logout", async (req, res) => {
     sessions.delete(cookieToken(req));
+    await recordActivityLog({ username: req.session.username, actor_name: req.session.fullName,
+        role: req.session.role, module: "Auth", action: "Logged Out", details: "Session ended" });
     res.clearCookie("epharma_session", { ...cookieOptions(), maxAge: undefined });
     res.json({ success: true });
 });
@@ -302,7 +329,8 @@ app.post("/api/medicines", async (req, res) => {
             reorder_level,
             expiry_date,
             batch_number,
-            shelf_location
+            shelf_location,
+            requires_prescription
         } = req.body;
 
         const discount = discount_percent === undefined || discount_percent === ""
@@ -331,8 +359,8 @@ app.post("/api/medicines", async (req, res) => {
         const [result] = await db.query(
             `INSERT INTO medicines
             (medicine_name, category, price, discount_percent, quantity,
-             reorder_level, expiry_date, batch_number, shelf_location)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             reorder_level, expiry_date, batch_number, shelf_location, requires_prescription)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 medicine_name.trim(),
                 category || null,
@@ -342,7 +370,8 @@ app.post("/api/medicines", async (req, res) => {
                 Number(reorder_level ?? 10),
                 expiry_date || null,
                 batch_number || null,
-                shelf_location ? String(shelf_location).trim().slice(0, 100) : null
+                shelf_location ? String(shelf_location).trim().slice(0, 100) : null,
+                requires_prescription === true || requires_prescription === 1 ? 1 : 0
             ]
         );
 
@@ -378,7 +407,8 @@ app.put("/api/medicines/:id", async (req, res) => {
             reorder_level,
             expiry_date,
             batch_number,
-            shelf_location
+            shelf_location,
+            requires_prescription
         } = req.body;
 
         const discount = discount_percent === undefined || discount_percent === ""
@@ -408,7 +438,7 @@ app.put("/api/medicines/:id", async (req, res) => {
             `UPDATE medicines
              SET medicine_name = ?, category = ?, price = ?, discount_percent = ?,
                  quantity = ?, reorder_level = ?, expiry_date = ?,
-                 batch_number = ?, shelf_location = ?
+                 batch_number = ?, shelf_location = ?, requires_prescription = COALESCE(?, requires_prescription)
              WHERE medicine_id = ?`,
             [
                 medicine_name.trim(),
@@ -420,6 +450,7 @@ app.put("/api/medicines/:id", async (req, res) => {
                 expiry_date || null,
                 batch_number || null,
                 shelf_location ? String(shelf_location).trim().slice(0, 100) : null,
+                requires_prescription === undefined ? null : (requires_prescription === true || requires_prescription === 1 ? 1 : 0),
                 id
             ]
         );
@@ -487,10 +518,13 @@ app.delete("/api/medicines/:id", async (req, res) => {
 app.get("/api/sales", async (req, res) => {
     try {
         await ensureSchemaUpgrades();
-        const cashierUsername = req.user.role === "cashier" ? req.user.username : String(req.query.cashier_username || "").trim();
+        const cashierUsername = String(req.query.cashier_username || "").trim();
         const params = [];
         let whereClause = "";
-        if (cashierUsername) {
+        if (req.user.role === "cashier") {
+            whereClause = "WHERE (s.cashier_id = ? OR (s.cashier_id IS NULL AND s.cashier_username = ?))";
+            params.push(req.user.user_id, req.user.username);
+        } else if (cashierUsername) {
             whereClause = "WHERE s.cashier_username = ?";
             params.push(cashierUsername);
         }
@@ -498,7 +532,10 @@ app.get("/api/sales", async (req, res) => {
         const [rows] = await db.query(`
             SELECT
                 s.sale_id,
+                s.status,
+                s.void_reason,
                 s.total_amount,
+                s.cashier_id,
                 s.cashier_username,
                 s.cashier_name,
                 s.sale_date,
@@ -538,6 +575,13 @@ app.post("/api/sales", async (req, res) => {
         } = req.body;
         const medicineId = Number(medicine_id);
         const qty = Number(quantity);
+        const discountType = req.body.discount_type || "regular";
+        const customerName = typeof req.body.customer_name === "string" ? req.body.customer_name.trim() : "";
+        const discountId = typeof req.body.discount_id_number === "string" ? req.body.discount_id_number.trim() : "";
+        if (!["regular", "senior", "pwd"].includes(discountType) ||
+            (discountType !== "regular" && (!customerName || !discountId || customerName.length > 120 || discountId.length > 100 || /[\x00-\x1f\x7f]/.test(customerName + discountId)))) {
+            return res.status(400).json({ message: "Select a valid customer type and provide customer name and ID for Senior/PWD sales." });
+        }
 
         if (
             !Number.isInteger(medicineId) ||
@@ -577,6 +621,10 @@ app.post("/api/sales", async (req, res) => {
         }
 
         const medicine = medicines[0];
+        if (Number(medicine.requires_prescription) === 1 && req.body.prescription_verified !== true) {
+            await connection.rollback();
+            return res.status(400).json({ message: "Prescription verification is required for this medicine." });
+        }
 
         if (medicine.quantity < qty) {
             await connection.rollback();
@@ -597,19 +645,29 @@ app.post("/api/sales", async (req, res) => {
             });
         }
 
-        if (req.user.role === "cashier" && ![0, 20, Number(medicine.discount_percent || 0)].includes(discountPercent)) {
+        if (req.user.role === "cashier" && discountType === "regular" && ![0, Number(medicine.discount_percent || 0)].includes(discountPercent)) {
             await connection.rollback();
             return res.status(403).json({ message: "Cashiers may only use the inventory discount or approved presets." });
         }
-        discountPercent = Number(discountPercent.toFixed(2));
-        const unitPrice = Number((originalPrice * (1 - discountPercent / 100)).toFixed(2));
-        const subtotal = Number((unitPrice * qty).toFixed(2));
+        // For eligible customers compare the configured promotion to statutory pricing, never stack them.
+        if (discountType !== "regular") discountPercent = Number(medicine.discount_percent || 0);
+        const calculated = pricing.calculate(originalPrice, qty, discountPercent, discountType);
+        discountPercent = calculated.discountPercent;
+        const unitPrice = calculated.unitPrice;
+        const subtotal = calculated.total;
+        if (req.body.cash_tendered !== undefined && req.body.cash_tendered !== null && req.body.cash_tendered !== "") {
+            const tendered = Number(req.body.cash_tendered);
+            if (!Number.isFinite(tendered) || tendered < subtotal) {
+                await connection.rollback();
+                return res.status(400).json({ message: "Cash tendered is below the current total." });
+            }
+        }
         const cashierUser = req.user.username;
         const cashierLabel = req.user.full_name;
 
         const [saleResult] = await connection.query(
-            "INSERT INTO sales (total_amount, cashier_username, cashier_name) VALUES (?, ?, ?)",
-            [subtotal, cashierUser, cashierLabel]
+            "INSERT INTO sales (total_amount, cashier_username, cashier_name, cashier_id, discount_type, customer_name, discount_id_number, vat_exempt_sales, discount_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [subtotal, cashierUser, cashierLabel, req.user.user_id, discountType, discountType === "regular" ? null : customerName, discountType === "regular" ? null : discountId, calculated.vatExemptSales, calculated.discountAmount]
         );
 
         await connection.query(
@@ -644,6 +702,12 @@ app.post("/api/sales", async (req, res) => {
             unit_price: unitPrice,
             discount_percent: discountPercent,
             total_amount: subtotal,
+            discount_type: discountType,
+            customer_name: discountType === "regular" ? "" : customerName,
+            discount_id_number: discountType === "regular" ? "" : discountId,
+            vat_exempt_sales: calculated.vatExemptSales,
+            discount_amount: calculated.discountAmount,
+            applied_discount: calculated.applied,
             cashier_username: cashierUser,
             cashier_name: cashierLabel
         });
@@ -659,6 +723,38 @@ app.post("/api/sales", async (req, res) => {
             connection.release();
         }
     }
+});
+
+// Admin-only void: lock the sale so concurrent requests cannot restore stock twice.
+app.post("/api/sales/:id/void", async (req, res) => {
+    const id = Number(req.params.id);
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+    if (!Number.isSafeInteger(id) || id <= 0 || !reason || reason.length > 255 || /[\x00-\x1f\x7f]/.test(reason)) {
+        return res.status(400).json({ message: "Provide a valid sale ID and void reason (up to 255 characters)." });
+    }
+    let connection;
+    try {
+        await ensureSchemaUpgrades();
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+        const [sales] = await connection.query("SELECT sale_id, status FROM sales WHERE sale_id = ? FOR UPDATE", [id]);
+        if (!sales.length) { await connection.rollback(); return res.status(404).json({ message: "Sale not found." }); }
+        if (sales[0].status === "VOIDED") { await connection.rollback(); return res.status(409).json({ message: "Sale is already voided." }); }
+        const [items] = await connection.query("SELECT medicine_id, quantity FROM sale_items WHERE sale_id = ? ORDER BY medicine_id FOR UPDATE", [id]);
+        if (!items.length) { await connection.rollback(); return res.status(409).json({ message: "Sale has no items to restore." }); }
+        for (const item of items) {
+            const [updated] = await connection.query("UPDATE medicines SET quantity = quantity + ? WHERE medicine_id = ?", [item.quantity, item.medicine_id]);
+            if (!updated.affectedRows) throw new Error("Unable to restore medicine stock.");
+        }
+        await connection.query("UPDATE sales SET status = 'VOIDED', void_reason = ? WHERE sale_id = ?", [reason, id]);
+        await connection.commit();
+        await recordActivityLog({ username: req.user.username, actor_name: req.user.full_name, role: req.user.role, module: "Sales", action: "Voided Sale", details: `Receipt EP-${String(id).padStart(4, "0")}: ${reason}` });
+        res.json({ success: true, message: "Sale voided and stock restored." });
+    } catch (error) {
+        if (connection) { try { await connection.rollback(); } catch {} }
+        console.error("Void sale error:", error.message);
+        sendDbError(res, error, "Unable to void sale.");
+    } finally { if (connection) connection.release(); }
 });
 
 
@@ -1220,10 +1316,7 @@ async function readStoredSettings() {
 
         if (rows.length > 0) {
             const row = rows[0];
-            return {
-                configured: true,
-                source: "mysql",
-                settings: normalizeSettings({
+            const settings = normalizeSettings({
                     pharmacyName: row.pharmacy_name,
                     pharmacyEmail: row.pharmacy_email,
                     pharmacyPhone: row.pharmacy_phone,
@@ -1241,8 +1334,10 @@ async function readStoredSettings() {
                     cashierName: row.cashier_name,
                     dateFormat: row.date_format,
                     lowStockLevel: row.low_stock_level
-                })
-            };
+                });
+            try { await writeSettingsToFile(settings); }
+            catch (error) { console.error("Settings fallback sync failed:", error.message); }
+            return { configured: true, source: "mysql", settings };
         }
     } catch {
         // Fallback to local JSON settings file when MySQL is offline.
@@ -1304,11 +1399,7 @@ async function handleSaveSettings(req, res) {
             ...body
         });
 
-        await writeSettingsToFile(updated);
-
-        let savedToMysql = false;
-        try {
-            await ensureSettingsTable();
+        await ensureSettingsTable();
             await db.query(
                 `INSERT INTO pharmacy_settings (
                     setting_id, pharmacy_name, pharmacy_email, pharmacy_phone,
@@ -1354,10 +1445,9 @@ async function handleSaveSettings(req, res) {
                     updated.lowStockLevel
                 ]
             );
-            savedToMysql = true;
-        } catch {
-            // File persistence already succeeded; ignore if MySQL is not running.
-        }
+        let mirrorWarning = null;
+        try { await writeSettingsToFile(updated); }
+        catch (error) { mirrorWarning = "Saved in MySQL, but local fallback could not be synchronized."; console.error(mirrorWarning, error.message); }
 
         await recordActivityLog({
             username: req.user.username,
@@ -1371,8 +1461,9 @@ async function handleSaveSettings(req, res) {
         res.json({
             success: true,
             configured: true,
-            source: savedToMysql ? "mysql+file" : "file",
-            message: "Settings saved successfully.",
+            source: mirrorWarning ? "mysql" : "mysql+file",
+            message: mirrorWarning || "Settings saved successfully.",
+            warning: mirrorWarning,
             settings: updated
         });
     } catch (error) {
@@ -1441,7 +1532,7 @@ app.post("/api/auth/login", async (req, res) => {
 
         loginAttempts.delete(key);
         const token = crypto.randomBytes(32).toString("hex");
-        sessions.set(token, { userId: user.user_id, passwordHash: user.password_hash, expires: Date.now() + SESSION_TTL_MS });
+        sessions.set(token, { userId: user.user_id, username: user.username, fullName: user.full_name, role: user.role, passwordHash: user.password_hash, last_active_at: Date.now(), expires: Date.now() + SESSION_TTL_MS });
         res.cookie("epharma_session", token, cookieOptions());
         res.json({
             success: true,
@@ -1555,6 +1646,7 @@ app.put("/api/account/password", async (req, res) => {
             [hashPassword(newPassword), user.user_id]
         );
 
+        for (const [token, session] of sessions) if (session.userId === user.user_id) sessions.delete(token);
         await recordActivityLog({
             username: user.username,
             actor_name: user.full_name,
@@ -1585,7 +1677,13 @@ app.get("/api/users", async (req, res) => {
              FROM users
              ORDER BY role ASC, user_id ASC`
         );
-        res.json(rows);
+        const now = Date.now();
+        const onlineIds = new Set();
+        for (const [token, session] of sessions) {
+            if (session.expires <= now || now - session.last_active_at >= SESSION_IDLE_MS) sessions.delete(token);
+            else onlineIds.add(session.userId);
+        }
+        res.json(rows.map(row => ({ ...row, online: row.status === "Active" && onlineIds.has(row.user_id) })));
     } catch (error) {
         console.error("Get users error:", error.message);
         sendDbError(res, error, "Unable to load users.");
@@ -1696,6 +1794,9 @@ app.put("/api/users/:id", async (req, res) => {
             );
         }
 
+        if (newPassword || status === "Inactive") {
+            for (const [token, session] of sessions) if (session.userId === id) sessions.delete(token);
+        }
         await recordActivityLog({
             username: req.user.username,
             actor_name: req.user.full_name,
@@ -1783,8 +1884,10 @@ app.post("/api/activity-logs", async (req, res) => {
     try {
         const { module, action, details } = req.body || {};
         const { username, full_name: actor_name, role } = req.user;
-        if (!module || !action) {
-            return res.status(400).json({ message: "Module and action are required." });
+        // Client events may not impersonate server-generated audit actions.
+        if (module !== "Client" || !["Opened Help"].includes(action) ||
+            (details !== undefined && (typeof details !== "string" || details.length > 500 || /[\x00-\x1f\x7f]/.test(details)))) {
+            return res.status(400).json({ message: "Invalid client activity event." });
         }
         await recordActivityLog({ username, actor_name, role, module, action, details });
         res.status(201).json({ success: true });

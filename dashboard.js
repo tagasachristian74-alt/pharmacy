@@ -306,7 +306,7 @@ function getNiceChartCeiling(maxValue) {
 
 function buildSalesOverviewData(period) {
     const now = new Date();
-    const records = typeof salesRecords !== "undefined" ? salesRecords : [];
+    const records = typeof salesRecords !== "undefined" ? salesRecords.filter(s => s.status !== "VOIDED") : [];
     const buckets = [];
 
     if (period === "today") {
@@ -756,8 +756,7 @@ const pageTemplates = {
                         <button type="button" class="discount-chip" data-discount="0">0%</button>
                         <button type="button" class="discount-chip" data-discount="5">5%</button>
                         <button type="button" class="discount-chip" data-discount="10">10%</button>
-                        <button type="button" class="discount-chip" data-discount="20">20% Senior/PWD</button>
-                    </div>
+                        </div>
                 </div>
 
                 <div class="form-field">
@@ -793,6 +792,9 @@ const pageTemplates = {
                     <input id="medicineShelf" maxlength="100" placeholder="e.g., Shelf A-2">
                 </div>
 
+                <div class="form-field">
+                    <label><input type="checkbox" id="medicineRx"> Prescription required (Rx)</label>
+                </div>
                 <div class="form-field form-full">
                     <div class="price-preview-banner" id="medicinePricePreviewBanner">
                         <span>Final Selling Price Preview</span>
@@ -867,6 +869,9 @@ sales: `
                 </select>
             </div>
 
+            <div class="form-field form-full" id="rxVerificationField" hidden>
+                <label><input type="checkbox" id="salesRxVerified"> Prescription verified</label>
+            </div>
             <div class="form-field">
                 <label for="salesQuantity">Quantity *</label>
                 <input type="number" id="salesQuantity"
@@ -887,10 +892,25 @@ sales: `
                 <div class="discount-presets" id="salesDiscountPresets">
                     <button type="button" class="discount-chip" data-discount="inventory">Inventory Default</button>
                     <button type="button" class="discount-chip" data-discount="0">0%</button>
-                    <button type="button" class="discount-chip" data-discount="20">20% Senior/PWD</button>
                 </div>
             </div>
 
+            <div class="form-field">
+                <label for="salesCustomerType">Customer Discount Type</label>
+                <select id="salesCustomerType">
+                    <option value="regular">Regular</option>
+                    <option value="senior">Senior Citizen (20% + VAT Exempt)</option>
+                    <option value="pwd">PWD (20% + VAT Exempt)</option>
+                </select>
+            </div>
+            <div class="form-field" id="salesCustomerNameField" hidden>
+                <label for="salesCustomerName">Customer Name *</label>
+                <input id="salesCustomerName" maxlength="120" autocomplete="off">
+            </div>
+            <div class="form-field" id="salesCustomerIdField" hidden>
+                <label for="salesCustomerId">OSCA / PWD ID Number *</label>
+                <input id="salesCustomerId" maxlength="100" autocomplete="off">
+            </div>
             <div class="form-field">
                 <label for="salesUnitPrice">Final Unit Price</label>
                 <input type="text" id="salesUnitPrice"
@@ -986,6 +1006,7 @@ sales: `
                         <th>Unit Price</th>
                         <th>Discount</th>
                         <th>Total</th>
+                        <th>Status / Action</th>
                     </tr>
                 </thead>
                 <tbody id="salesRecordsBody"></tbody>
@@ -1580,6 +1601,7 @@ cashiers: `
                         <th>Role</th>
                         <th>Email</th>
                         <th>Status</th>
+                        <th>Presence</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -1978,6 +2000,12 @@ function renderInventory() {
         const nameStrong = document.createElement("strong");
         nameStrong.textContent = medicine.name;
         nameCell.appendChild(nameStrong);
+        if (medicine.requiresPrescription) {
+            const rx = document.createElement("span");
+            rx.className = "badge warning";
+            rx.textContent = "Rx";
+            nameCell.appendChild(rx);
+        }
         row.appendChild(nameCell);
 
         const categoryCell = document.createElement("td");
@@ -2160,6 +2188,7 @@ function openMedicineForm(medicineId = null) {
         document.getElementById("medicineBatch").value = medicine.batch || "";
         document.getElementById("medicineExpiry").value = medicine.expiry || "";
         document.getElementById("medicineShelf").value = medicine.shelf || "";
+        document.getElementById("medicineRx").checked = Boolean(medicine.requiresPrescription);
 
         document.getElementById("medicineFormTitle").textContent =
             "Edit Medicine";
@@ -2376,7 +2405,8 @@ async function initializeInventoryPage() {
             reorder_level: reorderLevel,
             batch_number: document.getElementById("medicineBatch").value.trim(),
             expiry_date: document.getElementById("medicineExpiry").value,
-            shelf_location: document.getElementById("medicineShelf").value.trim()
+            shelf_location: document.getElementById("medicineShelf").value.trim(),
+            requires_prescription: document.getElementById("medicineRx").checked
         };
 
         try {
@@ -2601,12 +2631,20 @@ function renderPosReceipt(receiptInfo) {
            <div><span>Change</span><strong>₱${receiptInfo.changeAmount.toFixed(2)}</strong></div>`
         : "";
 
+    const customerRows = receiptInfo.discountType && receiptInfo.discountType !== "regular"
+        ? `<div><span>Customer type</span><strong>${escapeSupplierText(receiptInfo.discountType === "senior" ? "Senior Citizen" : "PWD")}</strong></div>
+           <div><span>Customer name</span><strong>${escapeSupplierText(receiptInfo.customerName)}</strong></div>
+           <div><span>OSCA / PWD ID</span><strong>${escapeSupplierText(receiptInfo.discountId)}</strong></div>
+           <div><span>Discount applied</span><strong>${escapeSupplierText(receiptInfo.appliedDiscount === "statutory" ? "20% statutory + VAT exemption" : "Promotion (better price)")}</strong></div>
+           <div><span>VAT-exempt sales</span><strong>₱${Number(receiptInfo.vatExemptSales).toFixed(2)}</strong></div>
+           <div><span>Discount amount</span><strong>₱${Number(receiptInfo.discountAmount).toFixed(2)}</strong></div>` : "";
     details.innerHTML = `
         <div><span>Receipt No.</span><strong>${escapeSupplierText(receiptInfo.receipt)}</strong></div>
         <div><span>Date & Time</span><strong>${escapeSupplierText(receiptInfo.date)}</strong></div>
         <div><span>Cashier</span><strong>${escapeSupplierText(receiptInfo.cashierName)}</strong></div>
         <div><span>Medicine</span><strong>${escapeSupplierText(receiptInfo.medicineName)} × ${receiptInfo.quantity}</strong></div>
         <div><span>Unit Price</span><strong>₱${receiptInfo.unitPrice.toFixed(2)}${receiptInfo.discount > 0 ? ` (${receiptInfo.discount}% OFF)` : ""}</strong></div>
+        ${customerRows}
         <div><span>Total Paid</span><strong>₱${receiptInfo.total.toFixed(2)}</strong></div>
         ${changeRow}
     `;
@@ -2657,11 +2695,7 @@ function getFilteredSalesRecords() {
     const weekCutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).getTime();
 
     return salesRecords.filter(function (sale) {
-        if (cashierMode) {
-            if ((sale.cashierUsername || "").toLowerCase() !== myUsername.toLowerCase()) {
-                return false;
-            }
-        } else if (cashierFilter !== "all") {
+        if (!cashierMode && cashierFilter !== "all") {
             const matchKey = (sale.cashierUsername || sale.cashierName || "").toLowerCase();
             if (matchKey !== cashierFilter.toLowerCase()) return false;
         }
@@ -2695,7 +2729,7 @@ function getFilteredSalesRecords() {
 function exportSalesReportCsv() {
     if (isCashierRole()) return;
     const rows = getFilteredSalesRecords();
-    const headers = ["Receipt No", "Date", "Cashier", "Username", "Medicine", "Quantity", "Unit Price", "Discount %", "Total"];
+    const headers = ["Receipt No", "Date", "Cashier", "Username", "Medicine", "Quantity", "Unit Price", "Discount %", "Total", "Status", "Void Reason"];
     const csvLines = [headers.join(",")];
 
     rows.forEach(r => {
@@ -2708,7 +2742,9 @@ function exportSalesReportCsv() {
             r.quantity,
             Number(r.unitPrice).toFixed(2),
             normalizeDiscountPercent(r.discount),
-            Number(r.total).toFixed(2)
+            Number(r.total).toFixed(2),
+            r.status || "COMPLETED",
+            r.voidReason || ""
         ].map(val => `"${String(val).replace(/"/g, '""')}"`).join(",");
         csvLines.push(line);
     });
@@ -2791,6 +2827,9 @@ async function initializeSalesPage() {
     const quantityInput = document.getElementById("salesQuantity");
     const discountInput = document.getElementById("salesDiscount");
     const discountPresets = document.getElementById("salesDiscountPresets");
+    const customerType = document.getElementById("salesCustomerType");
+    const customerName = document.getElementById("salesCustomerName");
+    const customerId = document.getElementById("salesCustomerId");
     const cashInput = document.getElementById("salesCashReceived");
     const searchInput = document.getElementById("salesSearch");
     const dateFilterSelect = document.getElementById("salesDateFilter");
@@ -2799,7 +2838,7 @@ async function initializeSalesPage() {
     // Cashiers cannot edit medicine pricing/discount rules freely — they use Inventory Default, 0%, or Senior/PWD 20%.
     if (discountInput && cashierMode) {
         discountInput.readOnly = true;
-        discountInput.title = "Discounts use Inventory Default or 20% Senior/PWD preset (Admin configures inventory discounts).";
+        discountInput.title = "Use the inventory discount or 0%; select customer type separately for Senior/PWD.";
     }
 
     async function loadSalesMedicines() {
@@ -2816,7 +2855,7 @@ async function initializeSalesPage() {
 
             option.value = String(medicine.id);
             option.textContent =
-                medicine.name +
+                medicine.name + (medicine.requiresPrescription ? " [Rx]" : "") +
                 " — ₱" + finalPrice.toFixed(2) +
                 (discount > 0 ? " (" + discount + "% OFF)" : "") +
                 " · Stock: " + medicine.quantity;
@@ -2853,14 +2892,25 @@ async function initializeSalesPage() {
             return item.id === medicineId;
         });
 
+        const rxField = document.getElementById("rxVerificationField");
+        const rxCheck = document.getElementById("salesRxVerified");
+        if (rxField) rxField.hidden = !medicine?.requiresPrescription;
+        if (rxCheck) rxCheck.required = Boolean(medicine?.requiresPrescription);
         const quantity = Number(quantityInput.value);
         const originalPrice = medicine ? medicine.price : 0;
         const discount = medicine
             ? normalizeDiscountPercent(discountInput ? discountInput.value : medicine.discount)
             : 0;
-        const finalUnitPrice = medicine
-            ? calculateDiscountedPrice(originalPrice, discount)
+        const customer = customerType?.value || "regular";
+        const selectedPromo = customer === "regular" ? discount : normalizeDiscountPercent(medicine?.discount || 0);
+        const finalUnitPrice = medicine && Number.isInteger(quantity) && quantity > 0
+            ? window.EPharmaPricing.calculate(originalPrice, quantity, selectedPromo, customer).unitPrice
             : 0;
+        const needsCustomer = customer !== "regular";
+        document.getElementById("salesCustomerNameField").hidden = !needsCustomer;
+        document.getElementById("salesCustomerIdField").hidden = !needsCustomer;
+        customerName.required = needsCustomer;
+        customerId.required = needsCustomer;
 
         const total =
             medicine && Number.isInteger(quantity) && quantity > 0
@@ -2906,9 +2956,11 @@ async function initializeSalesPage() {
 
     medicineSelect.addEventListener("change", function () {
         applyMedicineDefaultDiscount();
+        document.getElementById("salesRxVerified").checked = false;
         updateSaleTotal();
     });
     quantityInput.addEventListener("input", updateSaleTotal);
+    customerType.addEventListener("change", updateSaleTotal);
     if (discountInput && !cashierMode) discountInput.addEventListener("input", updateSaleTotal);
     if (cashInput) cashInput.addEventListener("input", updateSaleTotal);
 
@@ -2927,7 +2979,8 @@ async function initializeSalesPage() {
 
     if (printBtn) {
         printBtn.addEventListener("click", function () {
-            window.print();
+            document.body.classList.add("printing-receipt");
+            try { window.print(); } finally { document.body.classList.remove("printing-receipt"); }
         });
     }
 
@@ -2978,8 +3031,16 @@ async function initializeSalesPage() {
         }
 
         const discount = normalizeDiscountPercent(discountNum);
-        const finalUnitPrice = calculateDiscountedPrice(medicine.price, discount);
-        const total = Math.round(finalUnitPrice * quantity * 100) / 100;
+        const type = customerType.value;
+        const name = customerName.value.trim();
+        const idNumber = customerId.value.trim();
+        if (type !== "regular" && (!name || !idNumber)) {
+            alert("Customer name and Senior/PWD ID are required."); return;
+        }
+        const selectedPromo = type === "regular" ? discount : normalizeDiscountPercent(medicine.discount);
+        const computed = window.EPharmaPricing.calculate(medicine.price, quantity, selectedPromo, type);
+        const finalUnitPrice = computed.unitPrice;
+        const total = computed.total;
 
         const cashValue = cashInput && cashInput.value.trim() !== ""
             ? Number(cashInput.value)
@@ -3020,7 +3081,12 @@ async function initializeSalesPage() {
                     quantity: quantity,
                     discount_percent: discount,
                     cashier_name: cashierName,
-                    cashier_username: cashierUsername
+                    cashier_username: cashierUsername,
+                    prescription_verified: Boolean(document.getElementById("salesRxVerified")?.checked),
+                    discount_type: type,
+                    customer_name: name,
+                    discount_id_number: idNumber,
+                    cash_tendered: cashValue
                 })
             });
 
@@ -3098,12 +3164,18 @@ async function initializeSalesPage() {
                 cashierName,
                 medicineName: medicine.name,
                 quantity,
-                discount,
+                discount: Number(result.discount_percent ?? discount),
                 unitPrice: Number(result.unit_price ?? finalUnitPrice),
-                total: Number(result.total ?? total),
+                total: Number(result.total_amount ?? total),
+                discountType: result.discount_type,
+                customerName: result.customer_name,
+                discountId: result.discount_id_number,
+                appliedDiscount: result.applied_discount,
+                vatExemptSales: result.vat_exempt_sales,
+                discountAmount: result.discount_amount,
                 cashTendered: cashValue,
                 changeAmount: cashValue !== null
-                    ? Math.max(0, cashValue - Number(result.total ?? total))
+                    ? Math.max(0, cashValue - Number(result.total_amount ?? total))
                     : 0
             });
 
@@ -3146,15 +3218,16 @@ function renderSalesRecords() {
     if (!tbody) return;
 
     const filteredRecords = getFilteredSalesRecords();
-    const totalAmount = filteredRecords.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
-    const itemsSold = filteredRecords.reduce((sum, sale) => sum + Number(sale.quantity || 0), 0);
+    const completedRecords = filteredRecords.filter(sale => sale.status !== "VOIDED");
+    const totalAmount = completedRecords.reduce((sum, sale) => sum + Number(sale.total || 0), 0);
+    const itemsSold = completedRecords.reduce((sum, sale) => sum + Number(sale.quantity || 0), 0);
 
     const totalEl = document.getElementById("salesTodayTotal");
     const countEl = document.getElementById("salesTransactionCount");
     const unitsEl = document.getElementById("salesItemsSold");
 
     if (totalEl) totalEl.textContent = "₱" + totalAmount.toFixed(2);
-    if (countEl) countEl.textContent = String(filteredRecords.length);
+    if (countEl) countEl.textContent = String(completedRecords.length);
     if (unitsEl) unitsEl.textContent = String(itemsSold);
 
     tbody.innerHTML = "";
@@ -3163,7 +3236,7 @@ function renderSalesRecords() {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
 
-        cell.colSpan = 8;
+        cell.colSpan = 9;
         cell.className = "inventory-empty";
         cell.textContent = isCashierRole()
             ? "No transactions found for your account."
@@ -3210,7 +3283,34 @@ function renderSalesRecords() {
         totalStrong.textContent = "₱" + Number(sale.total).toFixed(2);
         totalCell.appendChild(totalStrong);
         row.appendChild(totalCell);
-
+        const statusCell = document.createElement("td");
+        if (sale.status === "VOIDED") {
+            statusCell.textContent = "VOIDED" + (sale.voidReason ? " — " + sale.voidReason : "");
+        } else if (!isCashierRole()) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = "Void Sale";
+            button.addEventListener("click", async () => {
+                const reason = prompt("Reason for voiding this sale:");
+                if (reason === null) return;
+                if (!reason.trim()) { showSalesMessage("A void reason is required.", true); return; }
+                if (!confirm("Void this sale and restore stock?")) return;
+                button.disabled = true;
+                try {
+                    const response = await fetch(`/api/sales/${encodeURIComponent(sale.saleId)}/void`, {
+                        method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ reason: reason.trim() })
+                    });
+                    const result = await response.json().catch(() => ({}));
+                    if (!response.ok) throw new Error(result.message || "Unable to void sale.");
+                    await loadSalesRecordsFromDatabase();
+                    await loadMedicinesFromDatabase();
+                    showSalesMessage(result.message);
+                } catch (error) { showSalesMessage(error.message, true); button.disabled = false; }
+            });
+            statusCell.appendChild(button);
+        } else statusCell.textContent = "Completed";
+        row.appendChild(statusCell);
         tbody.appendChild(row);
     });
 }
@@ -4147,9 +4247,9 @@ async function initializeSettingsPage() {
             const result = await branding.saveSettings(payload);
             populateFields(result.settings);
             recordLocalActivity("Settings", "Updated Pharmacy Info", `Saved settings for ${pharmacyName}`);
-            const msg = result.syncedToServer
+            const msg = result.warning || (result.syncedToServer
                 ? "Pharmacy information saved. Logo updated across the app."
-                : "Saved in this browser only. Connect to the server to share the logo across devices.";
+                : "Saved in this browser only. Connect to the server to share the logo across devices.");
             setInlineStatus(msg, false);
             showSettingsMessage(msg, false);
         } catch (error) {
@@ -4240,8 +4340,9 @@ async function loadUsersForManagement() {
         renderCashiers();
     } catch (error) {
         console.error("Load users error:", error);
-        cashierUsers = branding ? branding.getDemoUsers() : [];
+        cashierUsers = [];
         renderCashiers();
+        showCashierMessage("Unable to load accounts. Check the database connection.", true);
     }
 }
 
@@ -4266,7 +4367,7 @@ function renderCashiers() {
     });
 
     if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="inventory-empty">No matching user accounts found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="inventory-empty">No matching user accounts found.</td></tr>';
         return;
     }
 
@@ -4282,6 +4383,7 @@ function renderCashiers() {
                 <td><span class="badge ${u.role === "admin" ? "role-admin" : "role-cashier"}">${escapeSupplierText(u.role)}</span></td>
                 <td>${escapeSupplierText(u.email || "-")}</td>
                 <td><span class="status-badge ${isActive ? "status-in-stock" : "status-out-of-stock"}">${escapeSupplierText(u.status)}</span></td>
+                <td>${u.online ? "Online (recent activity)" : "Offline"}</td>
                 <td>
                     <div class="action-buttons">
                         <button type="button" data-cashier-action="edit" data-id="${u.user_id}">Edit</button>
@@ -4859,8 +4961,14 @@ function renderNotifications() {
         item => !notificationReadState[item.id]
     ).length;
 
-    count.textContent = unreadCount > 99 ? "99+" : unreadCount;
-    count.style.display = unreadCount > 0 ? "inline-flex" : "none";
+    const stockAlerts = notifications.filter(item => item.type === "stock").length;
+    const expiryAlerts = notifications.filter(item => item.type === "expiry").length;
+    const button = document.getElementById("notificationButton");
+    if (button) button.setAttribute("aria-label", `Alerts: ${stockAlerts} low or out of stock, ${expiryAlerts} near-expiry or expired`);
+    const alertCount = notifications.length;
+    count.textContent = alertCount > 99 ? "99+" : String(alertCount);
+    count.style.display = alertCount > 0 ? "inline-flex" : "none";
+    count.title = `${stockAlerts} stock alerts, ${expiryAlerts} expiration alerts (${unreadCount} unread)`;
 
     if (notifications.length === 0) {
         list.innerHTML = `
@@ -4949,9 +5057,9 @@ function refreshDashboardStats() {
 
     if (typeof salesRecords !== "undefined") {
         const now = new Date();
-        const visibleSales = cashierMode
-            ? salesRecords.filter(s => (s.cashierUsername || "").toLowerCase() === myUsername)
-            : salesRecords;
+        const completedSales = salesRecords.filter(s => s.status !== "VOIDED");
+        // Cashier data is already restricted to their account by the server.
+        const visibleSales = completedSales;
 
         if (totalSalesElement) {
             if (cashierMode) {
@@ -4968,7 +5076,7 @@ function refreshDashboardStats() {
                     shiftNote.textContent = `You have completed ${myTodayCount} transaction${myTodayCount === 1 ? "" : "s"} today (${visibleSales.length} total on record).`;
                 }
             } else {
-                const salesTotalSum = salesRecords.reduce((sum, s) => sum + Number(s.total || 0), 0);
+                const salesTotalSum = completedSales.reduce((sum, s) => sum + Number(s.total || 0), 0);
                 totalSalesElement.textContent = "₱" + salesTotalSum.toLocaleString("en-PH", {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2
@@ -5048,7 +5156,8 @@ async function loadMedicinesFromDatabase() {
                 reorderLevel: Number(row.reorder_level),
                 batch: row.batch_number || "",
                 expiry: row.expiry_date ? String(row.expiry_date).slice(0, 10) : "",
-                shelf: row.shelf_location || ""
+                shelf: row.shelf_location || "",
+                requiresPrescription: Number(row.requires_prescription) === 1
             };
         });
 
@@ -5099,6 +5208,10 @@ async function loadSalesRecordsFromDatabase() {
         isDemoDatabaseMode = false;
         salesRecords = rows.map(function (row) {
             return {
+                saleId: Number(row.sale_id),
+                status: row.status || "COMPLETED",
+                cashierId: row.cashier_id,
+                voidReason: row.void_reason || "",
                 receipt: "EP-" +
                     String(row.sale_id).padStart(4, "0"),
                 date: new Date(row.sale_date).toLocaleString("en-PH"),
@@ -5259,6 +5372,24 @@ function initializePurchaseReceiveButton() {
         }
     });
 }
+
+// POS-only keyboard navigation. Do not hijack typing in form controls.
+document.addEventListener("keydown", function (event) {
+    const salesForm = document.getElementById("salesForm");
+    if (!salesForm) return;
+    const typing = event.target && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
+    if ((event.key === "F2" || (event.altKey && event.key.toLowerCase() === "s")) && !typing) {
+        const medicine = document.getElementById("salesMedicine");
+        if (medicine && !document.getElementById("posCheckoutSection")?.hidden) {
+            event.preventDefault();
+            medicine.focus();
+        }
+    }
+    if (event.key === "Escape" && !typing) {
+        const panel = document.getElementById("notificationPanel");
+        if (panel && !panel.hidden) panel.hidden = true;
+    }
+});
 
 // =========================================
 // INITIAL ROLE & ROUTE STARTUP

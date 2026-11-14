@@ -943,3 +943,15 @@
         align-items: flex-start;
     }
 }
+
+/* Compact checkboxes in medicine and prescription forms. */
+.inventory-form input[type="checkbox"] { width: auto; height: auto; margin-right: 6px; }
+@media print {
+    @page { size: auto; margin: 2mm; }
+    body.printing-receipt * { visibility: hidden !important; }
+    body.printing-receipt #posReceiptCard:not([hidden]), body.printing-receipt #posReceiptCard:not([hidden]) * { visibility: visible !important; }
+    body.printing-receipt #posReceiptCard:not([hidden]) { position: absolute; top: 0; left: 0; width: 100%; max-width: 74mm; padding: 0; margin: 0; border: 0; box-shadow: none; color: #000; }
+    body.printing-receipt #printReceiptBtn { display: none !important; }
+    .pos-receipt-grid { display: block; font-size: 10pt; }
+    .pos-receipt-grid div { display: flex; justify-content: space-between; gap: 4mm; }
+}

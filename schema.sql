@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS medicines (
     expiry_date DATE DEFAULT NULL,
     batch_number VARCHAR(80) DEFAULT NULL,
     shelf_location VARCHAR(100) DEFAULT NULL,
+    requires_prescription TINYINT(1) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
@@ -55,9 +56,18 @@ CREATE TABLE IF NOT EXISTS suppliers (
 CREATE TABLE IF NOT EXISTS sales (
     sale_id INT AUTO_INCREMENT PRIMARY KEY,
     total_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    status ENUM('COMPLETED', 'VOIDED') NOT NULL DEFAULT 'COMPLETED',
+    void_reason VARCHAR(255) DEFAULT NULL,
+    discount_type ENUM('regular', 'senior', 'pwd') NOT NULL DEFAULT 'regular',
+    customer_name VARCHAR(120) DEFAULT NULL,
+    discount_id_number VARCHAR(100) DEFAULT NULL,
+    vat_exempt_sales DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    cashier_id INT DEFAULT NULL,
     cashier_username VARCHAR(80) DEFAULT 'admin',
     cashier_name VARCHAR(120) DEFAULT 'Admin',
-    sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_sales_cashier FOREIGN KEY (cashier_id) REFERENCES users(user_id) ON DELETE SET NULL
 );
 
 -- 5. SALE ITEMS
