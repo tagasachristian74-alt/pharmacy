@@ -1552,6 +1552,12 @@ cashiers: `
 
         <form id="cashierForm" class="inventory-form">
             <input type="hidden" id="cashierUserId">
+            <div class="form-field form-full">
+                <label for="cashierEmployeeId">Staff ID</label>
+                <input id="cashierEmployeeId" maxlength="40" placeholder="Leave blank to generate on save">
+                <button type="button" class="inventory-button secondary" id="generateCashierIdBtn">Generate ID</button>
+                <small>Generated suggestions are not reserved until saved.</small>
+            </div>
             <div class="form-field form-full photo-editor">
                 <img id="cashierPhotoPreview" class="profile-photo-preview" src="assets/avatar-cashier.png" alt="Cashier photo preview">
                 <label for="cashierPhotoFile">Upload / Change Photo</label>
@@ -1708,6 +1714,11 @@ account: `
             </div>
 
             <form id="accountProfileForm" class="inventory-form">
+                <div class="form-field form-full">
+                    <label for="accountEmployeeId">Staff ID</label>
+                    <input id="accountEmployeeId" readonly>
+                    <button type="button" class="inventory-button secondary" id="accountPrintId">View / Print ID Card</button>
+                </div>
                 <div class="form-field form-full photo-editor">
                     <img id="accountPhotoPreview" class="profile-photo-preview" src="assets/avatar-admin.png" alt="Profile photo preview">
                     <label for="accountPhotoFile">Upload / Change Photo</label>
@@ -2686,7 +2697,7 @@ function renderPosReceipt(receiptInfo) {
         ${receiptInfo.status === "VOIDED" ? `<div><strong>VOIDED</strong><span>${escapeSupplierText(receiptInfo.voidReason || "")}</span></div>` : ""}
         <div><span>Receipt No.</span><strong>${escapeSupplierText(receiptInfo.receipt)}</strong></div>
         <div><span>Date & Time</span><strong>${escapeSupplierText(receiptInfo.date)}</strong></div>
-        <div><span>Cashier</span><strong>${escapeSupplierText(receiptInfo.cashierName)}</strong></div>
+        <div><span>Cashier</span><strong>${escapeSupplierText(receiptInfo.cashierName)}${receiptInfo.cashierEmployeeId ? ` (${escapeSupplierText(receiptInfo.cashierEmployeeId)})` : ""}</strong></div>
         <div><span>Medicine</span><strong>${escapeSupplierText(receiptInfo.medicineName)} × ${receiptInfo.quantity}</strong></div>
         <div><span>Unit Price</span><strong>₱${receiptInfo.unitPrice.toFixed(2)}${receiptInfo.discount > 0 ? ` (${receiptInfo.discount}% OFF)` : ""}</strong></div>
         ${customerRows}
@@ -3223,6 +3234,7 @@ async function initializeSalesPage() {
                 receipt: receiptNo,
                 date: nowStr,
                 cashierName,
+                cashierEmployeeId: result.cashier_employee_id || "",
                 medicineName: medicine.name,
                 quantity,
                 discount: Number(result.discount_percent ?? discount),
@@ -4463,7 +4475,7 @@ function renderCashiers() {
         const toggleLabel = isActive ? "Deactivate" : "Activate";
         return `
             <tr>
-                <td>USR-${String(u.user_id).padStart(3, "0")}</td>
+                <td>${escapeSupplierText(u.employee_id || "Not assigned")}</td>
                 <td><img class="table-profile-photo" src="${escapeSupplierText(u.avatar || (u.role === "cashier" ? "assets/avatar-cashier.png" : "assets/avatar-admin.png"))}" alt=""> <strong>${escapeSupplierText(u.full_name)}</strong></td>
                 <td>${escapeSupplierText(u.username)}</td>
                 <td><span class="badge ${u.role === "admin" ? "role-admin" : "role-cashier"}">${escapeSupplierText(u.role)}</span></td>
@@ -4472,6 +4484,7 @@ function renderCashiers() {
                 <td>${u.online ? "Online (recent activity)" : "Offline"}</td>
                 <td>
                     <div class="action-buttons">
+                        <button type="button" data-cashier-action="id-card" data-id="${u.user_id}">View / Print ID Card</button>
                         <button type="button" data-cashier-action="edit" data-id="${u.user_id}">Edit</button>
                         ${!isPrimaryAdmin ? `<button type="button" data-cashier-action="toggle" data-id="${u.user_id}">${toggleLabel}</button>` : ""}
                         ${!isPrimaryAdmin && u.role === "cashier" ? `<button type="button" class="delete-button" data-cashier-action="delete" data-id="${u.user_id}">Delete</button>` : ""}
@@ -4480,6 +4493,44 @@ function renderCashiers() {
             </tr>
         `;
     }).join("");
+}
+
+function showStaffIdCard(user) {
+    const existing = document.getElementById("staffIdModal");
+    if (existing) existing.remove();
+    const settings = window.EPharmaBranding?.getCachedSettings() || {};
+    const modal = document.createElement("div");
+    modal.id = "staffIdModal";
+    modal.className = "staff-id-modal";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-label", "Staff ID card");
+    const role = user.role === "cashier" ? "Cashier" : "Admin";
+    const photo = user.avatar || (user.role === "cashier" ? "assets/avatar-cashier.png" : "assets/avatar-admin.png");
+    modal.innerHTML = `<div class="staff-id-dialog">
+        <article class="staff-id-card" id="staffIdCard">
+            <header><img class="staff-id-logo" alt=""><strong>${escapeSupplierText(settings.pharmacyName || "E-Pharma")}</strong></header>
+            <img class="staff-id-photo" alt="Staff photo">
+            <h2>${escapeSupplierText(user.full_name || user.fullName || user.username)}</h2>
+            <p>${escapeSupplierText(role)} · ${escapeSupplierText(user.status || "Active")}</p>
+            <p>@${escapeSupplierText(user.username)}</p>
+            <strong class="staff-id-strip">${escapeSupplierText(user.employee_id || "Not assigned")}</strong>
+        </article>
+        <div class="staff-id-actions"><button type="button" class="inventory-button" data-id-print>Print ID Card</button><button type="button" class="inventory-button secondary" data-id-close>Close</button></div>
+    </div>`;
+    modal.querySelector(".staff-id-photo").src = photo;
+    modal.querySelector(".staff-id-logo").src = settings.pharmacyLogo || window.EPharmaBranding.DEFAULT_LOGO_PATH;
+    document.body.appendChild(modal);
+    const close = () => { document.body.classList.remove("printing-staff-id"); modal.remove(); };
+    modal.querySelector("[data-id-close]").addEventListener("click", close);
+    modal.addEventListener("click", event => { if (event.target === modal) close(); });
+    modal.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
+    modal.querySelector("[data-id-print]").addEventListener("click", () => {
+        document.body.classList.add("printing-staff-id");
+        window.addEventListener("afterprint", () => document.body.classList.remove("printing-staff-id"), { once: true });
+        try { window.print(); } catch (error) { document.body.classList.remove("printing-staff-id"); throw error; }
+    });
+    modal.querySelector("[data-id-close]").focus();
 }
 
 function setupPhotoEditor(prefix, initial, role, onError) {
@@ -4523,11 +4574,24 @@ async function initializeCashiersPage() {
     const passwordField = document.getElementById("cashierPassword");
     const passwordLabel = document.getElementById("cashierPasswordLabel");
     const formTitle = document.getElementById("cashierFormTitle");
+    const employeeIdField = document.getElementById("cashierEmployeeId");
+    const generateIdButton = document.getElementById("generateCashierIdBtn");
+    generateIdButton.addEventListener("click", async () => {
+        generateIdButton.disabled = true;
+        try {
+            const response = await fetch("/api/users/generate-id");
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || "Unable to generate ID.");
+            employeeIdField.value = data.employee_id;
+        } catch (error) { showCashierMessage(error.message, true); }
+        finally { generateIdButton.disabled = false; }
+    });
 
     const photoEditor = setupPhotoEditor("cashier", "", "cashier", message => showCashierMessage(message, true));
     function openCashierForm(user = null) {
         form.reset();
         photoEditor.setValue(user?.avatar || "");
+        employeeIdField.value = user?.employee_id || "";
         if (user) {
             formTitle.textContent = `Edit Account: ${user.username}`;
             idField.value = String(user.user_id);
@@ -4590,7 +4654,8 @@ async function initializeCashiersPage() {
                 email,
                 role: "cashier",
                 status,
-                avatar_data: photoEditor.getValue()
+                avatar_data: photoEditor.getValue(),
+                employee_id: employeeIdField.value.trim()
             };
             if (password) payload.password = password;
 
@@ -4663,6 +4728,7 @@ async function initializeCashiersPage() {
 
             const branding = window.EPharmaBranding;
 
+            if (action === "id-card") { showStaffIdCard(user); return; }
             if (action === "edit") {
                 openCashierForm(user);
                 return;
@@ -4831,6 +4897,9 @@ function initializeAccountPage() {
     const passwordMsg = document.getElementById("accountPasswordMessage");
 
     const photoEditor = setupPhotoEditor("account", session.avatar, session.role, message => setMsg(profileMsg, message, true));
+    const employeeIdInput = document.getElementById("accountEmployeeId");
+    if (employeeIdInput) employeeIdInput.value = session.employee_id || "Not assigned";
+    document.getElementById("accountPrintId")?.addEventListener("click", () => showStaffIdCard({ ...session, full_name: session.fullName }));
     if (usernameInput) usernameInput.value = session.username || "";
     if (fullNameInput) fullNameInput.value = session.fullName || getCurrentDisplayName();
     if (emailInput) emailInput.value = session.email || "";
@@ -5349,6 +5418,7 @@ async function loadSalesRecordsFromDatabase() {
                 saleId: Number(row.sale_id),
                 status: row.status || "COMPLETED",
                 cashierId: row.cashier_id,
+                cashierEmployeeId: row.cashier_employee_id || "",
                 voidReason: row.void_reason || "",
                 discountType: row.discount_type || "regular",
                 customerName: row.customer_name || "",

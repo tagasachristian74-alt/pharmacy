@@ -111,6 +111,8 @@ function completeLogin(user) {
             fullName: user.fullName || user.full_name || user.username,
             email: user.email || "",
             avatar: user.avatar || "",
+            employee_id: user.employee_id || "",
+            status: user.status || "Active",
             role: user.role
         });
     } else {

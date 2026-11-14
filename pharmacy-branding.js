@@ -63,6 +63,8 @@
                         fullName: String(parsed.fullName || (parsed.role === "cashier" ? "Cashier" : "Administrator")),
                         email: String(parsed.email || ""),
                         avatar: String(parsed.avatar || ""),
+                        employee_id: String(parsed.employee_id || ""),
+                        status: String(parsed.status || "Active"),
                         role: parsed.role
                     };
                 }
@@ -87,6 +89,8 @@
             fullName: String((session && (session.fullName || session.full_name)) || (role === "cashier" ? "Cashier" : "Administrator")),
             email: String((session && session.email) || ""),
             avatar: String((session && session.avatar) || ""),
+            employee_id: String((session && session.employee_id) || ""),
+            status: String((session && session.status) || "Active"),
             role
         };
         try {

@@ -60,6 +60,7 @@ test('Rx verification, senior price and admin void restore stock once', async ()
   const saved = history.find(row => row.sale_id === sale.sale_id);
   assert.equal(saved.discount_type, 'senior'); assert.equal(saved.customer_name, 'Test Person');
   assert.equal(saved.discount_id_number, 'TEST-ID'); assert.equal(saved.discount_amount, 40);
+  assert.equal(saved.cashier_employee_id, 'EP-CSH-2026-0002');
   let stock = await (await req('/api/medicines',{headers})).json(); assert.equal(stock[0].quantity,8);
   assert.equal((await req(`/api/sales/${sale.sale_id}/void`,{method:'POST',headers,body:JSON.stringify({reason:'mistake'})})).status,403);
   const admin = await login('admin','test-admin-password');
@@ -105,6 +106,23 @@ test('profile photo validation, persistence and reset for current user', async (
   assert.equal((await update({avatar_data:'data:image/svg+xml;base64,PHN2Zz4='})).status,400);
   assert.equal((await update({avatar_data:'data:image/png;base64,' + 'A'.repeat(140001)})).status,400);
   response = await update({avatar_data:''}); assert.equal(response.status,200); assert.equal((await response.json()).user.avatar,'');
+});
+
+test('staff IDs are admin-only, validated, unique and returned in session', async () => {
+  const cashier = await login('cashier','test-cashier-password');
+  assert.equal((await req('/api/users/generate-id',{headers:{cookie:cashier}})).status,403);
+  const admin = await login('admin','test-admin-password');
+  const headers={cookie:admin,'content-type':'application/json'};
+  const first=await (await req('/api/users/generate-id',{headers})).json();
+  const second=await (await req('/api/users/generate-id',{headers})).json();
+  assert.match(first.employee_id,/^EP-CSH-\d{4}-\d{4,}$/); assert.notEqual(first.employee_id,second.employee_id);
+  const payload={username:'newcashier',full_name:'New Cashier',password:'safe-test-password',employee_id:first.employee_id};
+  let response=await req('/api/users',{method:'POST',headers,body:JSON.stringify(payload)}); assert.equal(response.status,201);
+  assert.equal((await response.json()).employee_id,first.employee_id);
+  response=await req('/api/users',{method:'POST',headers,body:JSON.stringify({...payload,username:'othercashier'})}); assert.equal(response.status,409);
+  response=await req('/api/users',{method:'POST',headers,body:JSON.stringify({...payload,username:'invalidcashier',employee_id:'INVALID'})}); assert.equal(response.status,400);
+  const newCookie=await login('newcashier','safe-test-password');
+  assert.equal((await (await req('/api/auth/session',{headers:{cookie:newCookie}})).json()).user.employee_id,first.employee_id);
 });
 
 // Deletion revokes every session, not only the session used for the request.

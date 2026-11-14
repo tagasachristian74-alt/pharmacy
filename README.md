@@ -69,3 +69,7 @@ The `assets/` folder includes the supplied picture set. The login, role avatars,
 ## In-progress upgrade: cashier sales visibility
 
 Cashiers only see sales linked to their stable user ID. Historical sales with a NULL cashier ID remain visible to admins only until an administrator verifies and reconciles them. This prevents a reused username from exposing another cashier’s sales.
+
+## Staff ID migration (in progress)
+
+Back up the database before updating. On startup/API use, the server adds avatar and staff ID columns, a unique staff ID index, and a durable ID sequence, then assigns IDs to accounts without one. This requires CREATE, ALTER, INDEX, INSERT and UPDATE privileges. The Generate ID button consumes a sequence number but is not a reservation; gaps and duplicate-save conflicts are possible. Newly created sales record the staff ID as a snapshot; older sales without one remain unchanged. Test the migration on a restored copy before applying it to important data.

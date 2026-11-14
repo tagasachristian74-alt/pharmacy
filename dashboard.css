@@ -1119,3 +1119,14 @@ td small {
 .profile-photo-preview { width: 96px; height: 96px; border-radius: 50%; object-fit: cover; }
 .table-profile-photo { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; vertical-align: middle; }
 .avatar img { border-radius: 50%; object-fit: cover; }
+
+.staff-id-modal { position: fixed; inset: 0; z-index: 1000; background: rgba(4,25,29,.65); display: grid; place-items: center; padding: 20px; }
+.staff-id-dialog { background: white; border-radius: 16px; padding: 20px; max-width: 100%; }
+.staff-id-card { width: 320px; max-width: 100%; text-align: center; border: 1px solid #d7e9e7; border-radius: 16px; overflow: hidden; padding: 0 20px 20px; background: white; color: #09252d; }
+.staff-id-card header { margin: 0 -20px 18px; padding: 14px; background: #09252d; color: white; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.staff-id-logo { width: 34px; height: 34px; object-fit: contain; background: white; border-radius: 6px; }
+.staff-id-photo { width: 96px; height: 96px; object-fit: cover; border-radius: 50%; }
+.staff-id-card h2 { margin: 8px 0 2px; font-size: 20px; }
+.staff-id-strip { display: block; margin-top: 15px; padding: 8px; background: #e9f8f5; letter-spacing: .1em; font-variant-numeric: tabular-nums; }
+.staff-id-actions { display: flex; justify-content: center; gap: 8px; margin-top: 14px; }
+@media print { body.printing-staff-id > * { visibility: hidden !important; } body.printing-staff-id #staffIdModal, body.printing-staff-id #staffIdModal * { visibility: visible !important; } body.printing-staff-id #staffIdModal { position: absolute; inset: 0; display: block; background: white; padding: 0; } body.printing-staff-id .staff-id-actions { display: none !important; } body.printing-staff-id .staff-id-dialog { padding: 0; } }

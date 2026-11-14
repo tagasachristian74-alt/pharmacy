@@ -17,10 +17,17 @@ CREATE TABLE IF NOT EXISTS users (
     full_name VARCHAR(120) NOT NULL,
     email VARCHAR(150) DEFAULT '',
     avatar_data LONGTEXT NULL,
+    employee_id VARCHAR(40) NULL,
+    UNIQUE KEY uq_users_employee_id (employee_id),
     role ENUM('admin', 'cashier') NOT NULL DEFAULT 'cashier',
     status ENUM('Active', 'Inactive') NOT NULL DEFAULT 'Active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+-- Durable allocation counter. Gaps are expected; IDs are never reissued.
+CREATE TABLE IF NOT EXISTS staff_id_sequence (
+    sequence_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY
 );
 
 -- 2. MEDICINES INVENTORY
@@ -65,6 +72,7 @@ CREATE TABLE IF NOT EXISTS sales (
     vat_exempt_sales DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     cashier_id INT DEFAULT NULL,
+    cashier_employee_id VARCHAR(40) DEFAULT NULL,
     cashier_username VARCHAR(80) DEFAULT 'admin',
     cashier_name VARCHAR(120) DEFAULT 'Admin',
     sale_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

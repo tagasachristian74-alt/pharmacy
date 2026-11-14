@@ -101,6 +101,7 @@ async function performSchemaUpgrades() {
         { table: "sales", column: "void_reason", sql: "ALTER TABLE sales ADD COLUMN void_reason VARCHAR(255) NULL" },
         { table: "medicines", column: "requires_prescription", sql: "ALTER TABLE medicines ADD COLUMN requires_prescription TINYINT(1) NOT NULL DEFAULT 0" },
         { table: "sales", column: "cashier_id", sql: "ALTER TABLE sales ADD COLUMN cashier_id INT NULL" },
+        { table: "sales", column: "cashier_employee_id", sql: "ALTER TABLE sales ADD COLUMN cashier_employee_id VARCHAR(40) NULL" },
         { table: "medicines", column: "shelf_location", sql: "ALTER TABLE medicines ADD COLUMN shelf_location VARCHAR(100) DEFAULT NULL" },
         {
             table: "medicines",
@@ -149,6 +150,8 @@ async function performSchemaUpgrades() {
             full_name VARCHAR(120) NOT NULL,
             email VARCHAR(150) DEFAULT '',
             avatar_data LONGTEXT NULL,
+            employee_id VARCHAR(40) NULL,
+            UNIQUE KEY uq_users_employee_id (employee_id),
             role ENUM('admin', 'cashier') NOT NULL DEFAULT 'cashier',
             status ENUM('Active', 'Inactive') NOT NULL DEFAULT 'Active',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -160,6 +163,13 @@ async function performSchemaUpgrades() {
         "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = 'avatar_data'", [dbName]
     );
     if (avatarColumns.length === 0) await db.query("ALTER TABLE users ADD COLUMN avatar_data LONGTEXT NULL");
+    const [employeeColumns] = await db.query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'users' AND COLUMN_NAME = 'employee_id'", [dbName]
+    );
+    if (employeeColumns.length === 0) await db.query("ALTER TABLE users ADD COLUMN employee_id VARCHAR(40) NULL");
+    const [employeeIndex] = await db.query("SHOW INDEX FROM users WHERE Key_name = 'uq_users_employee_id'");
+    if (employeeIndex.length === 0) await db.query("CREATE UNIQUE INDEX uq_users_employee_id ON users (employee_id)");
+    await db.query("CREATE TABLE IF NOT EXISTS staff_id_sequence (sequence_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY)");
 
     await db.query(`
         CREATE TABLE IF NOT EXISTS activity_logs (
@@ -194,7 +204,31 @@ async function performSchemaUpgrades() {
         );
     }
 
+    // Assign missing IDs without overwriting IDs previously assigned by an administrator.
+    const [missingIds] = await db.query("SELECT user_id, role, YEAR(created_at) AS created_year FROM users WHERE employee_id IS NULL OR employee_id = '' ORDER BY user_id");
+    for (const user of missingIds) {
+        const employeeId = await allocateEmployeeId(user.role, Number(user.created_year) || manilaYear());
+        await db.query("UPDATE users SET employee_id = ? WHERE user_id = ? AND (employee_id IS NULL OR employee_id = '')", [employeeId, user.user_id]);
+    }
     schemaUpgraded = true;
+}
+
+function manilaYear() {
+    return Number(new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Manila", year: "numeric" }).format(new Date()));
+}
+function validEmployeeId(value, role) {
+    const prefix = role === "admin" ? "ADM" : "CSH";
+    return typeof value === "string" && value.length <= 40 && new RegExp(`^EP-${prefix}-[0-9]{4}-[0-9]{4,25}$`).test(value);
+}
+async function allocateEmployeeId(role = "cashier", year = manilaYear()) {
+    for (let attempt = 0; attempt < 100; attempt++) {
+        const [sequence] = await db.query("INSERT INTO staff_id_sequence () VALUES ()");
+        const number = String(sequence.insertId);
+        const candidate = `EP-${role === "admin" ? "ADM" : "CSH"}-${year}-${number.padStart(4, "0")}`;
+        const [existing] = await db.query("SELECT user_id FROM users WHERE employee_id = ? LIMIT 1", [candidate]);
+        if (existing.length === 0) return candidate;
+    }
+    throw new Error("Could not allocate a staff ID.");
 }
 
 async function recordActivityLog({ username, actor_name, role, module, action, details = "" }) {
@@ -245,7 +279,7 @@ app.use("/api", async (req, res, next) => {
     }
     if (req.path === "/auth/logout" && req.method === "POST") { req.session = session; return next(); }
     try {
-        const [rows] = await db.query("SELECT user_id, username, full_name, email, role, status, password_hash, avatar_data FROM users WHERE user_id = ? LIMIT 1", [session.userId]);
+        const [rows] = await db.query("SELECT user_id, username, full_name, email, role, status, password_hash, avatar_data, employee_id FROM users WHERE user_id = ? LIMIT 1", [session.userId]);
         const user = rows[0];
         if (!user || user.status !== "Active" || user.password_hash !== session.passwordHash) {
             sessions.delete(token);
@@ -266,7 +300,7 @@ app.use("/api", async (req, res, next) => {
 });
 app.get("/api/auth/session", (req, res) => res.json({ user: {
     user_id: req.user.user_id, username: req.user.username, fullName: req.user.full_name,
-    email: req.user.email || "", role: req.user.role, avatar: req.user.avatar_data || ""
+    email: req.user.email || "", role: req.user.role, avatar: req.user.avatar_data || "", employee_id: req.user.employee_id || ""
 } }));
 app.post("/api/auth/logout", async (req, res) => {
     sessions.delete(cookieToken(req));
@@ -546,6 +580,7 @@ app.get("/api/sales", async (req, res) => {
                 s.discount_amount,
                 s.total_amount,
                 s.cashier_id,
+                s.cashier_employee_id,
                 s.cashier_username,
                 s.cashier_name,
                 s.sale_date,
@@ -682,8 +717,8 @@ app.post("/api/sales", async (req, res) => {
         const cashierLabel = req.user.full_name;
 
         const [saleResult] = await connection.query(
-            "INSERT INTO sales (total_amount, cashier_username, cashier_name, cashier_id, discount_type, customer_name, discount_id_number, vat_exempt_sales, discount_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [subtotal, cashierUser, cashierLabel, req.user.user_id, discountType, discountType === "regular" ? null : customerName, discountType === "regular" ? null : discountId, calculated.vatExemptSales, calculated.discountAmount]
+            "INSERT INTO sales (total_amount, cashier_username, cashier_name, cashier_id, discount_type, customer_name, discount_id_number, vat_exempt_sales, discount_amount, cashier_employee_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [subtotal, cashierUser, cashierLabel, req.user.user_id, discountType, discountType === "regular" ? null : customerName, discountType === "regular" ? null : discountId, calculated.vatExemptSales, calculated.discountAmount, req.user.employee_id || null]
         );
 
         await connection.query(
@@ -725,7 +760,8 @@ app.post("/api/sales", async (req, res) => {
             discount_amount: calculated.discountAmount,
             applied_discount: calculated.applied,
             cashier_username: cashierUser,
-            cashier_name: cashierLabel
+            cashier_name: cashierLabel,
+            cashier_employee_id: req.user.employee_id || ""
         });
     } catch (error) {
         if (connection) {
@@ -1522,7 +1558,7 @@ app.post("/api/auth/login", async (req, res) => {
         await ensureSchemaUpgrades();
 
         const [rows] = await db.query(
-            `SELECT user_id, username, password_hash, full_name, email, role, status, avatar_data
+            `SELECT user_id, username, password_hash, full_name, email, role, status, avatar_data, employee_id
              FROM users
              WHERE username = ?
              LIMIT 1`,
@@ -1564,7 +1600,8 @@ app.post("/api/auth/login", async (req, res) => {
                 email: user.email || "",
                 role: user.role,
                 status: user.status,
-                avatar: user.avatar_data || ""
+                avatar: user.avatar_data || "",
+                employee_id: user.employee_id || ""
             }
         });
     } catch (error) {
@@ -1624,7 +1661,8 @@ app.put("/api/account/profile", async (req, res) => {
                 fullName,
                 email,
                 role: user.role,
-                avatar: avatar === undefined ? (req.user.avatar_data || "") : avatar
+                avatar: avatar === undefined ? (req.user.avatar_data || "") : avatar,
+                employee_id: req.user.employee_id || ""
             }
         });
     } catch (error) {
@@ -1700,7 +1738,7 @@ app.get("/api/users", async (req, res) => {
     try {
         await ensureSchemaUpgrades();
         const [rows] = await db.query(
-            `SELECT user_id, username, full_name, email, role, status, created_at, avatar_data AS avatar
+            `SELECT user_id, username, full_name, email, role, status, created_at, avatar_data AS avatar, employee_id
              FROM users
              ORDER BY role ASC, user_id ASC`
         );
@@ -1717,6 +1755,17 @@ app.get("/api/users", async (req, res) => {
     }
 });
 
+// The generated ID is a suggestion, not a reservation; uniqueness is enforced on save.
+app.get("/api/users/generate-id", async (req, res) => {
+    try {
+        await ensureSchemaUpgrades();
+        res.json({ employee_id: await allocateEmployeeId("cashier") });
+    } catch (error) {
+        console.error("Generate staff ID error:", error.message);
+        sendDbError(res, error, "Unable to generate staff ID.");
+    }
+});
+
 app.post("/api/users", async (req, res) => {
     try {
         const username = String(req.body?.username || "").trim();
@@ -1726,6 +1775,8 @@ app.post("/api/users", async (req, res) => {
         const role = req.body?.role === "admin" ? "admin" : "cashier";
         const status = req.body?.status === "Inactive" ? "Inactive" : "Active";
         const avatar = req.body?.avatar_data ?? "";
+        const suppliedId = String(req.body?.employee_id || "").trim();
+        if (suppliedId && !validEmployeeId(suppliedId, role)) return res.status(400).json({ message: "Invalid staff ID format." });
         if (!isSafeAvatarValue(avatar)) return res.status(400).json({ message: "Invalid or oversized profile photo." });
 
         if (!username || !fullName || password.length < 12) {
@@ -1752,10 +1803,11 @@ app.post("/api/users", async (req, res) => {
             });
         }
 
+        const employeeId = suppliedId || await allocateEmployeeId(role);
         const [result] = await db.query(
-            `INSERT INTO users (username, password_hash, full_name, email, role, status, avatar_data)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [username, hashPassword(password), fullName, email, role, status, avatar || null]
+            `INSERT INTO users (username, password_hash, full_name, email, role, status, avatar_data, employee_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [username, hashPassword(password), fullName, email, role, status, avatar || null, employeeId]
         );
 
         await recordActivityLog({
@@ -1770,9 +1822,11 @@ app.post("/api/users", async (req, res) => {
         res.status(201).json({
             success: true,
             message: "Account created successfully.",
-            user_id: result.insertId
+            user_id: result.insertId,
+            employee_id: employeeId
         });
     } catch (error) {
+        if (error.code === "ER_DUP_ENTRY") return res.status(409).json({ message: "Username or staff ID already exists." });
         console.error("Create user error:", error.message);
         sendDbError(res, error, "Unable to create account.");
     }
@@ -1807,25 +1861,20 @@ app.put("/api/users/:id", async (req, res) => {
             return res.status(404).json({ message: "Account not found." });
         }
 
+        const employeeId = req.body?.employee_id === undefined ? rows[0].employee_id : String(req.body.employee_id || "").trim();
+        if (!validEmployeeId(employeeId, rows[0].role)) return res.status(400).json({ message: "Invalid staff ID format." });
         if (rows[0].username === "admin" && status === "Inactive") {
             return res.status(400).json({
                 message: "The primary administrator account cannot be deactivated."
             });
         }
 
-        if (newPassword) {
-            await db.query(
-                "UPDATE users SET full_name = ?, email = ?, status = ?, password_hash = ? WHERE user_id = ?",
-                [fullName, email, status, hashPassword(newPassword), id]
-            );
-        } else {
-            await db.query(
-                "UPDATE users SET full_name = ?, email = ?, status = ? WHERE user_id = ?",
-                [fullName, email, status, id]
-            );
-        }
-
-        if (avatar !== undefined) await db.query("UPDATE users SET avatar_data = ? WHERE user_id = ?", [avatar || null, id]);
+        const fields = ["full_name = ?", "email = ?", "status = ?", "employee_id = ?"];
+        const values = [fullName, email, status, employeeId];
+        if (newPassword) { fields.push("password_hash = ?"); values.push(hashPassword(newPassword)); }
+        if (avatar !== undefined) { fields.push("avatar_data = ?"); values.push(avatar || null); }
+        values.push(id);
+        await db.query(`UPDATE users SET ${fields.join(", ")} WHERE user_id = ?`, values);
         if (newPassword || status === "Inactive") {
             for (const [token, session] of sessions) if (session.userId === id) sessions.delete(token);
         }
@@ -1843,6 +1892,7 @@ app.put("/api/users/:id", async (req, res) => {
             message: "Account updated successfully."
         });
     } catch (error) {
+        if (error.code === "ER_DUP_ENTRY") return res.status(409).json({ message: "Staff ID already exists." });
         console.error("Update user error:", error.message);
         sendDbError(res, error, "Unable to update account.");
     }

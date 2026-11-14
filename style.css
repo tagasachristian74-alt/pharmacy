@@ -536,3 +536,6 @@ body {
 }
 /* Full artwork stays behind readable branding. */
 .brand-section { background: linear-gradient(145deg, rgba(7,28,36,.80), rgba(11,52,59,.72)), url("assets/login-hero.png") center / cover no-repeat; }
+.login-button { border-radius: 10px; font-weight: 600; transition: background-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.login-button:focus-visible { outline: 3px solid #1d5fd6; outline-offset: 2px; }
+.login-button:disabled { opacity: .55; cursor: not-allowed; }

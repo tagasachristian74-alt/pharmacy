@@ -955,3 +955,25 @@
     .pos-receipt-grid { display: block; font-size: 10pt; }
     .pos-receipt-grid div { display: flex; justify-content: space-between; gap: 4mm; }
 }
+
+/* Shared action-button tokens for the application workspace. */
+#pageContent :is(.btn, .inventory-button, .primary-btn, .secondary-btn, .danger-btn, .sell-quick-button, .delete-button, .discount-chip, .action-buttons button, #printReceiptBtn) {
+    border-radius: 10px;
+    font-weight: 600;
+    transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+#pageContent :is(.btn, .inventory-button, .primary-btn, .sell-quick-button) {
+    background: #079b89;
+    color: #fff;
+    border: 1px solid #079b89;
+}
+#pageContent :is(.btn, .inventory-button, .primary-btn, .sell-quick-button):hover:not(:disabled) { background: #067d70; border-color: #067d70; }
+#pageContent :is(.btn-secondary, .inventory-button.secondary, .secondary-btn, .action-buttons button) { background: #fff; border: 1px solid #cbdad8; color: #17524d; }
+#pageContent :is(.btn-secondary, .inventory-button.secondary, .secondary-btn, .action-buttons button):hover:not(:disabled) { background: #e9f8f5; }
+#pageContent :is(.btn-danger, .inventory-button.danger, .danger-btn, .delete-button) { background: #fff1f2; border: 1px solid #fecdd3; color: #b91c1c; }
+#pageContent :is(.btn-danger, .inventory-button.danger, .danger-btn, .delete-button):hover:not(:disabled) { background: #ffe4e6; }
+#pageContent .btn-success { background: #087e62; color: white; border: 1px solid #087e62; }
+#pageContent .btn-ghost { background: transparent; color: #067d70; border: 1px solid transparent; }
+#pageContent .btn-sm { padding: 6px 10px; font-size: 12px; min-height: 32px; }
+#pageContent button:focus-visible, .staff-id-modal button:focus-visible { outline: 3px solid #1d5fd6; outline-offset: 2px; }
+#pageContent button:disabled { opacity: .55; cursor: not-allowed; }
