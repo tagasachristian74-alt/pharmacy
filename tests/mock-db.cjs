@@ -9,7 +9,7 @@ const users = [
 ];
 const suppliers = [{supplier_id:1,supplier_name:'Active Supplier',status:'Active'}, {supplier_id:2,supplier_name:'Inactive Supplier',status:'Inactive'}];
 const medicine = { medicine_id: 1, medicine_name: 'Rx medicine', price: 112, quantity: 10, discount_percent: 0, reorder_level: 2, requires_prescription: 1 };
-const sales = [];
+const sales = [{sale_id: 100, cashier_id: null, cashier_username:'cashier', status:'COMPLETED'}, {sale_id:101,cashier_id:99,cashier_username:'cashier',status:'COMPLETED'}];
 const query = async (sql, values = []) => {
   if (sql.includes('INFORMATION_SCHEMA')) return [[{COLUMN_NAME:'exists', CONSTRAINT_NAME:'fk_sales_cashier'}]];
   if (sql.includes('SELECT COUNT(*) AS cnt FROM users')) return [[{cnt:users.length}]];
@@ -17,14 +17,15 @@ const query = async (sql, values = []) => {
   if (sql.includes('FROM users') && sql.includes('WHERE user_id')) return [users.filter(u => u.user_id === values[0])];
   if (sql.includes('FROM users') && sql.includes('ORDER BY role')) return [users];
   if (sql.includes('FROM sales s')) {
-    const visible = sales.filter(s => !values.length || (values.length === 2 ? (s.cashier_id === values[0] || (!s.cashier_id && s.cashier_username === values[1])) : s.cashier_username === values[0]));
-    return [visible.length ? visible.map(s => ({...s, medicine_name:medicine.medicine_name})) : [{cashier_username:values[1] || values[0] || 'all'}]];
+    const visible = sales.filter(s => !values.length || (sql.includes('WHERE s.cashier_id = ?') ? s.cashier_id === values[0] : s.cashier_username === values[0]));
+    return [visible.map(s => ({...s, medicine_name:medicine.medicine_name}))];
   }
   if (sql.includes('SELECT sale_id, status FROM sales')) return [sales.filter(s => s.sale_id === values[0]).map(s => ({sale_id:s.sale_id,status:s.status}))];
   if (sql.includes('SELECT medicine_id, quantity FROM sale_items')) return [sales.filter(s => s.sale_id === values[0]).map(s => ({medicine_id:1,quantity:s.quantity}))];
   if (sql.includes('SELECT * FROM medicines')) { if (values[0] === 2) return [[{...medicine,medicine_id:2,expiry_date:'2000-01-01'}]]; return [[{...medicine}]]; }
   if (sql.includes('SELECT medicine_id FROM medicines')) return [[{medicine_id:1}]];
   if (sql.includes('SELECT supplier_id, supplier_name FROM suppliers')) return [suppliers.filter(s => s.status === 'Active' && (s.supplier_id === values[0] || s.supplier_name === values[0]))];
+  if (sql.includes('DELETE FROM users WHERE user_id = ?')) { const i=users.findIndex(u=>u.user_id===values[0]); if(i>=0) users.splice(i,1); return [{affectedRows:i>=0?1:0}]; }
   if (sql.includes('UPDATE users SET full_name = ?')) { const u=users.find(u=>u.user_id===values[2]); if(u){u.full_name=values[0];u.email=values[1];} return [{affectedRows:u?1:0}]; }
   if (sql.includes('INSERT INTO sales (')) {
     const [total_amount,cashier_username,cashier_name,cashier_id,discount_type,customer_name,discount_id_number,vat_exempt_sales,discount_amount] = values;

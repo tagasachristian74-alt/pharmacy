@@ -65,3 +65,7 @@ Plaintext stored passwords are no longer accepted. Accounts created by this vers
 ## V9 picture assets
 
 The `assets/` folder includes the supplied picture set. The login, role avatars, Rx callout, notification empty state and available category icons use these images. Vitamins and Maintenance icons were not in the supplied folder, so those categories retain text labels. Feature, alert and cover images are included for future use. To use the supplied pharmacy logo throughout the app, upload `assets/pharmacy-logo.png` in Settings; this does not overwrite an existing custom logo.
+
+## In-progress upgrade: cashier sales visibility
+
+Cashiers only see sales linked to their stable user ID. Historical sales with a NULL cashier ID remain visible to admins only until an administrator verifies and reconciles them. This prevents a reused username from exposing another cashier’s sales.

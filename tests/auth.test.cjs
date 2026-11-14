@@ -36,7 +36,7 @@ test('cashier permissions, identity and logout are enforced server-side', async 
   assert.equal((await req('/api/settings',{method:'PUT',headers:{...headers,'content-type':'application/json'},body:'{}'})).status,403);
   assert.equal((await req('/api/medicines',{headers})).status,200);
   const sales = await req('/api/sales?cashier_username=admin',{headers});
-  assert.equal((await sales.json())[0].cashier_username,'cashier');
+  assert.deepEqual(await sales.json(), []); // legacy username-only and other users' sales must not leak
   assert.equal((await req('/api/auth/logout',{method:'POST',headers})).status,200);
   assert.equal((await req('/api/auth/session',{headers})).status,401);
 });
@@ -87,4 +87,14 @@ test('purchase requires an existing active supplier and expired medicines cannot
   response = await req('/api/purchases',{method:'POST',headers,body:JSON.stringify({...purchase,supplier_name:'Unknown supplier'})}); assert.equal(response.status,400);
   response = await req('/api/sales',{method:'POST',headers,body:JSON.stringify({medicine_id:2,quantity:1,prescription_verified:true})});
   assert.equal(response.status,400); assert.match((await response.json()).message,/expired/i);
+});
+
+// Deletion revokes every session, not only the session used for the request.
+test('deleting an account invalidates all its active sessions', async () => {
+  const first = await login('cashier','test-cashier-password');
+  const second = await login('cashier','test-cashier-password');
+  const admin = await login('admin','test-admin-password');
+  assert.equal((await req('/api/users/2',{method:'DELETE',headers:{cookie:admin}})).status,200);
+  assert.equal((await req('/api/auth/session',{headers:{cookie:first}})).status,401);
+  assert.equal((await req('/api/auth/session',{headers:{cookie:second}})).status,401);
 });

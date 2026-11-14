@@ -534,4 +534,5 @@ body {
         font-size: 24px;
     }
 }
-.login-hero-img { display: block; width: min(100%, 240px); height: auto; border-radius: 16px; border: 1px solid rgba(143,212,203,.18); margin-top: 24px; }
+/* Full artwork stays behind readable branding. */
+.brand-section { background: linear-gradient(145deg, rgba(7,28,36,.80), rgba(11,52,59,.72)), url("assets/login-hero.png") center / cover no-repeat; }

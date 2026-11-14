@@ -520,8 +520,9 @@ app.get("/api/sales", async (req, res) => {
         const params = [];
         let whereClause = "";
         if (req.user.role === "cashier") {
-            whereClause = "WHERE (s.cashier_id = ? OR (s.cashier_id IS NULL AND s.cashier_username = ?))";
-            params.push(req.user.user_id, req.user.username);
+            // Legacy rows without a stable cashier ID remain visible to admins only.
+            whereClause = "WHERE s.cashier_id = ?";
+            params.push(req.user.user_id);
         } else if (cashierUsername) {
             whereClause = "WHERE s.cashier_username = ?";
             params.push(cashierUsername);
@@ -1848,6 +1849,10 @@ app.delete("/api/users/:id", async (req, res) => {
         }
 
         await db.query("DELETE FROM users WHERE user_id = ?", [id]);
+        // Revoke all sessions for the deleted account, including other devices.
+        for (const [token, session] of sessions) {
+            if (session.userId === id) sessions.delete(token);
+        }
 
         await recordActivityLog({
             username: req.user.username,

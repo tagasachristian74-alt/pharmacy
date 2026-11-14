@@ -177,12 +177,21 @@ function lowStockThreshold(medicine) {
 }
 
 function updateDate() {
-    const dateElement = document.getElementById("currentDate");
-
-    if (!dateElement) return;
-
-    dateElement.textContent = formatPharmacyDate(new Date());
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila", year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true
+    }).formatToParts(new Date()).map(part => [part.type, part.value]));
+    const format = window.EPharmaBranding?.getCachedSettings().dateFormat || "MM/DD/YYYY";
+    const date = format === "YYYY-MM-DD" ? `${parts.year}-${parts.month}-${parts.day}` :
+        format === "DD/MM/YYYY" ? `${parts.day}/${parts.month}/${parts.year}` : `${parts.month}/${parts.day}/${parts.year}`;
+    const display = `${date} ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod}`;
+    for (const id of ["currentDate", "topbarLiveClock"]) {
+        const element = document.getElementById(id);
+        if (element) element.textContent = display;
+    }
 }
+updateDate();
+setInterval(updateDate, 1000);
 
 
 // =========================================
@@ -190,11 +199,39 @@ function updateDate() {
 // =========================================
 
 if (menuToggle && sidebar) {
+    try { document.body.classList.toggle("sidebar-collapsed", localStorage.getItem("epharmaSidebarCollapsed") === "true"); } catch {}
+    const backdrop = document.createElement("div");
+    backdrop.className = "sidebar-backdrop";
+    document.body.appendChild(backdrop);
+    function closeMobileMenu() {
+        sidebar.classList.remove("open");
+        document.body.classList.remove("mobile-menu-open");
+        menuToggle.setAttribute("aria-expanded", "false");
+    }
     menuToggle.addEventListener("click", function () {
-        const isOpen = sidebar.classList.toggle("open");
-
-        menuToggle.setAttribute("aria-expanded", String(isOpen));
+        if (window.innerWidth <= 700) {
+            const isOpen = sidebar.classList.toggle("open");
+            document.body.classList.toggle("mobile-menu-open", isOpen);
+            menuToggle.setAttribute("aria-expanded", String(isOpen));
+        } else {
+            const collapsed = document.body.classList.toggle("sidebar-collapsed");
+            try { localStorage.setItem("epharmaSidebarCollapsed", String(collapsed)); } catch {}
+            menuToggle.setAttribute("aria-expanded", String(!collapsed));
+        }
     });
+    backdrop.addEventListener("click", closeMobileMenu);
+    document.addEventListener("keydown", event => { if (event.key === "Escape" && window.innerWidth <= 700) closeMobileMenu(); });
+    function syncMenuState() {
+        if (window.innerWidth > 700) {
+            sidebar.classList.remove("open");
+            document.body.classList.remove("mobile-menu-open");
+            menuToggle.setAttribute("aria-expanded", String(!document.body.classList.contains("sidebar-collapsed")));
+        } else {
+            menuToggle.setAttribute("aria-expanded", String(sidebar.classList.contains("open")));
+        }
+    }
+    window.addEventListener("resize", syncMenuState);
+    syncMenuState();
 }
 
 document.addEventListener("click", function (event) {
@@ -207,6 +244,7 @@ document.addEventListener("click", function (event) {
         !menuToggle.contains(event.target)
     ) {
         sidebar.classList.remove("open");
+        document.body.classList.remove("mobile-menu-open");
         menuToggle.setAttribute("aria-expanded", "false");
     }
 });
@@ -1746,6 +1784,8 @@ function showPage(pageName) {
     if (pageName === "dashboard") {
         initializeDashboard();
         refreshDashboardStats();
+        loadMedicinesFromDatabase();
+        loadSalesRecordsFromDatabase();
     }
 
     if (pageName === "inventory") {
@@ -1778,12 +1818,10 @@ function showPage(pageName) {
     }
 
     // Close mobile sidebar after selecting a page.
-    if (sidebar) {
+    if (sidebar && window.innerWidth <= 700) {
         sidebar.classList.remove("open");
-    }
-
-    if (menuToggle) {
-        menuToggle.setAttribute("aria-expanded", "false");
+        document.body.classList.remove("mobile-menu-open");
+        if (menuToggle) menuToggle.setAttribute("aria-expanded", "false");
     }
 
     window.scrollTo({ top: 0, behavior: "auto" });
