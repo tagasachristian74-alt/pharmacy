@@ -235,18 +235,23 @@ if (menuToggle && sidebar) {
     backdrop.className = "sidebar-backdrop";
     document.body.appendChild(backdrop);
     function closeMobileMenu() {
+        const hadFocus = sidebar.contains(document.activeElement);
         sidebar.classList.remove("open");
         document.body.classList.remove("mobile-menu-open");
+        sidebar.inert = window.innerWidth <= 700;
         menuToggle.setAttribute("aria-expanded", "false");
+        if (hadFocus) menuToggle.focus();
     }
     menuToggle.addEventListener("click", function () {
         if (window.innerWidth <= 700) {
             const isOpen = sidebar.classList.toggle("open");
             document.body.classList.toggle("mobile-menu-open", isOpen);
+            sidebar.inert = !isOpen;
             menuToggle.setAttribute("aria-expanded", String(isOpen));
         } else {
             const collapsed = document.body.classList.toggle("sidebar-collapsed");
             try { localStorage.setItem("epharmaSidebarCollapsed", String(collapsed)); } catch {}
+            sidebar.inert = collapsed;
             menuToggle.setAttribute("aria-expanded", String(!collapsed));
         }
     });
@@ -256,8 +261,10 @@ if (menuToggle && sidebar) {
         if (window.innerWidth > 700) {
             sidebar.classList.remove("open");
             document.body.classList.remove("mobile-menu-open");
+            sidebar.inert = document.body.classList.contains("sidebar-collapsed");
             menuToggle.setAttribute("aria-expanded", String(!document.body.classList.contains("sidebar-collapsed")));
         } else {
+            sidebar.inert = !sidebar.classList.contains("open");
             menuToggle.setAttribute("aria-expanded", String(sidebar.classList.contains("open")));
         }
     }
@@ -276,6 +283,7 @@ document.addEventListener("click", function (event) {
     ) {
         sidebar.classList.remove("open");
         document.body.classList.remove("mobile-menu-open");
+        sidebar.inert = true;
         menuToggle.setAttribute("aria-expanded", "false");
     }
 });
@@ -1875,7 +1883,10 @@ function showPage(pageName) {
     if (sidebar && window.innerWidth <= 700) {
         sidebar.classList.remove("open");
         document.body.classList.remove("mobile-menu-open");
+        sidebar.inert = true;
         if (menuToggle) menuToggle.setAttribute("aria-expanded", "false");
+        const heading = pageContent.querySelector("h1");
+        if (heading) { heading.setAttribute("tabindex", "-1"); heading.focus({ preventScroll: true }); }
     }
 
     window.scrollTo({ top: 0, behavior: "auto" });
