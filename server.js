@@ -2,6 +2,7 @@
 const express = require("express");
 const mysql = require("mysql2/promise");
 const crypto = require("crypto");
+const { createAccessGate } = require("./access-gate");
 const pricing = require("./pricing");
 const fs = require("fs");
 const path = require("path");
@@ -9,6 +10,14 @@ require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Limit browser embedding, MIME sniffing and referrer leakage. HTTPS termination is external.
+app.use((req, res, next) => {
+    res.set({ "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer", "Permissions-Policy": "camera=(), microphone=(), geolocation=()" });
+    next();
+});
+// Opt-in demo access gate, in addition to the application's own user login.
+app.use(createAccessGate({ required: process.env.EPHARMA_REQUIRE_ACCESS_GATE === "true", password: process.env.EPHARMA_ACCESS_PASSWORD }));
 
 // The browser app is same-origin; do not enable cross-origin API access.
 app.disable("x-powered-by");
@@ -1985,7 +1994,7 @@ app.post("/api/activity-logs", async (req, res) => {
 
 
 // Start server
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, process.env.BIND_HOST || "0.0.0.0", () => {
     console.log(`E-Pharma server running at http://localhost:${PORT}`);
 });
 

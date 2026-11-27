@@ -91,3 +91,9 @@ Remove-Item Env:TEST_DB_PASSWORD, Env:EPHARMA_TEST_MYSQL -ErrorAction SilentlyCo
 ```
 
 Do not share test credentials. If a test is interrupted, the test database may remain and can be inspected and removed by an administrator.
+
+### Optional extra demo access gate (defense)
+
+For temporary ngrok demonstrations, the app can request a separate shared access password before serving any page, asset, or API. This supplements the normal admin/cashier login; it does not replace it and is **off by default**. To require it, set `EPHARMA_REQUIRE_ACCESS_GATE=true` and `EPHARMA_ACCESS_PASSWORD` to a unique random password (16–128 characters). If required but missing/short, startup fails. Set `BIND_HOST=127.0.0.1` to restrict direct app access to the same computer and `COOKIE_SECURE=true` for HTTPS through ngrok. Protect your ngrok account and local ngrok inspector; close the tunnel after use. Never expose MySQL or use real patient data for a demo.
+
+The gate's browser prompt uses username `demo` and the separate access password; then staff must still log in to E-Pharma. HTTP Basic transmits credentials on every request and requires HTTPS between the browser and ngrok. The browser may cache gate credentials until closed. The local ngrok-to-app hop is HTTP over loopback. This is a shared password, not per-user access or MFA. Ten failed attempts lock the observed source address for 15 minutes; behind ngrok multiple visitors may share an address and block one another. The limiter is in memory and resets on restart, so it is not durable distributed attack protection. No security audit is implied. For real deployment, use a managed identity-aware access layer, independent review, secure hosting, backups, and monitoring.
